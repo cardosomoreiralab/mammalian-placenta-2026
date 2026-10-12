@@ -10,9 +10,9 @@ In this repository, you can find the code necessary to reproduce figures present
 
 All scripts below start from processed objects and reference files deposited in this repository (see Data availability). Non-processed (raw) files have been deposited to ArrayExpress (see Data availability).
 
-## Reference files
+## Reference data
 
-Please see data/reference_files for 
+Files necessary to replicate the analysis (such as gene lists, orthology tables, etc.) can be found in folder Reference_files.
 
 ## Data availability
 
