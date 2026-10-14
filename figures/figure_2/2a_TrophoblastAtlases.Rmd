@@ -1,0 +1,219 @@
+---
+title: "2a: UMAPs from final trophoblast atlases"
+author: "Marcin Falis"
+date: "May 28th, 2026"
+last_update: "October 13th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/Figure2/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+library(tidyr)
+library(biomaRt)
+library(edgeR)
+library(tibble)
+library(ggdendro)
+library(factoextra)
+```
+## Assigning a palette that will be re-used throughout the clustering
+```{r}
+palette <- c("Labyrinth progenitors" = "#C77C00",
+              "JZ progenitors" = "#E69500",
+             "CTB" = "#A86500",
+             "SynT I" = "#0A3D85",
+              "SynT II" = "#0C63B8",
+             "Fusing CTB" = "#1977D2",
+             "STB" = "#062E66",
+             "STB (rabbit)" = "#08418F",
+             "STB (guinea pig)" = "#1456B0",
+             "GlyT" = "#D993B9",
+              "SpA-TGC (mouse)" = "#9C4F85",
+             "Invasive trophoblast (rat)" = "#B76AA3",
+             "Invasive trophoblast (rabbit)" = "#C982B8",
+             "Invasive trophoblast (guinea pig)" = "#A1427C",
+             "Column CTB" = "#E3A9C8",
+             "EVT" = "#7A3A65",
+              "SpT" = "#0B525B",
+             "S-TGC" = "#4FB3BF",
+             "P-TGC (precursors)" = "#1D7874")
+```
+## Mouse Atlas
+```{r}
+Atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/MouseTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+## Extracting trophoblasts and renaming to match the palette
+Atlas@meta.data$cell.type.final <- Atlas@meta.data %>%
+  mutate(cell.type.final = case_when(cell.type.short %in% c("SpT", "precSpT") ~ "SpT",
+                                     cell.type.short == "precPTGC" ~ "P-TGC (precursors)",
+                                     cell.type.short == "LaTP" ~ "Labyrinth progenitors",
+                                     cell.type.short %in% c("precSynTI", "SynTI") ~ "SynT I",
+                                     cell.type.short == "JZTP" ~ "JZ progenitors",
+                                     cell.type.short %in% c("precSTGC", "STGC") ~ "S-TGC",
+                                     cell.type.short %in% c("precSynTII", "SynTII") ~ "SynT II",
+                                     cell.type.short == "SpATGC" ~ "SpA-TGC (mouse)", .default = cell.type.short)) %>%
+  pull(cell.type.final)
+
+## Assigning identity
+Idents(Atlas) <- "cell.type.final"
+p1 <- DimPlot(Atlas, cols = palette) + NoLegend() + theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank())
+ggsave(filename = "Visuals/TrophoblastAtlas_Mouse_UMAP.png", plot = p1, width = 6, height = 4)
+ggsave(filename = "Visuals/TrophoblastAtlas_Mouse_UMAP.pdf", plot = p1, width = 6, height = 4)
+
+## Clear up
+rm(list = setdiff(ls(), c("palette")))
+```
+## Rat Atlas
+```{r}
+Atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/RatTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+## Extracting trophoblasts and renaming to match the palette
+Atlas@meta.data$cell.type.final <- Atlas@meta.data %>%
+  mutate(cell.type.final = case_when(cell.type.short == "precPTGC" ~ "P-TGC (precursors)",
+                                     cell.type.short == "LaTP" ~ "Labyrinth progenitors",
+                                     cell.type.short %in% c("SynTI", "precSynTI") ~ "SynT I",
+                                     cell.type.short == "JZTP" ~ "JZ progenitors",
+                                     cell.type.short %in% c("precSTGC", "STGC") ~ "S-TGC",
+                                     cell.type.short %in% c("SynTII") ~ "SynT II",
+                                     cell.type.short== "InvTroph" ~ "Invasive trophoblast (rat)",
+                                     .default = cell.type.short)) %>%
+  pull(cell.type.final)
+
+## Assigning identity
+Idents(Atlas) <- "cell.type.final"
+p1 <- DimPlot(Atlas, cols = palette) + NoLegend() + theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank())
+ggsave(filename = "Visuals/TrophoblastAtlas_Rat_UMAP.png", plot = p1, width = 6, height = 4)
+ggsave(filename = "Visuals/TrophoblastAtlas_Rat_UMAP.pdf", plot = p1, width = 6, height = 4)
+
+## Clear up
+rm(list = setdiff(ls(), c("palette")))
+```
+## Human Atlas
+```{r}
+Atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/HumanTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+## Extracting trophoblasts and renaming to match the palette
+Atlas@meta.data$cell.type.final <- Atlas@meta.data %>%
+  mutate(cell.type.final = case_when(cell.type.short== "fCTB" ~ "Fusing CTB",
+                                     cell.type.short== "cCTB" ~ "Column CTB",
+                                     .default = cell.type.short)) %>%
+  pull(cell.type.final)
+
+## Assigning identity
+Idents(Atlas) <- "cell.type.final"
+p1 <- DimPlot(Atlas, cols = palette) + NoLegend() + theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank())
+ggsave(filename = "Visuals/TrophoblastAtlas_Human_UMAP.png", plot = p1, width = 6, height = 4)
+ggsave(filename = "Visuals/TrophoblastAtlas_Human_UMAP.pdf", plot = p1, width = 6, height = 4)
+
+## Clear up
+rm(list = setdiff(ls(), c("palette")))
+```
+## Marmoset Atlas
+```{r}
+Atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/MarmosetTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+Atlas@meta.data$cell.type.final <- Atlas@meta.data %>%
+  mutate(cell.type.final = case_when(cell.type.short== "fCTB" ~ "Fusing CTB",
+                                     .default = cell.type.short)) %>%
+  pull(cell.type.final)
+
+## Assigning identity
+Idents(Atlas) <- "cell.type.final"
+p1 <- DimPlot(Atlas, cols = palette) + NoLegend() + theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank())
+ggsave(filename = "Visuals/TrophoblastAtlas_Marmoset_UMAP.png", plot = p1, width = 6, height = 4)
+ggsave(filename = "Visuals/TrophoblastAtlas_Marmoset_UMAP.pdf", plot = p1, width = 6, height = 4)
+
+## Clear up
+rm(list = setdiff(ls(), c("palette")))
+```
+## Rabbit Atlas
+```{r}
+Atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/RabbitTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+Atlas@meta.data$cell.type.final <- Atlas@meta.data %>%
+  mutate(cell.type.final = case_when(cell.type.short == "InvTroph" ~ "Invasive trophoblast (rabbit)",
+                                     cell.type.short == "TrophProg" ~ "CTB",
+                                     cell.type.short == "STB" ~ "STB (rabbit)",
+                                     cell.type.short == "fCTB" ~ "Fusing CTB")) %>%
+  pull(cell.type.final)
+
+## Assigning identity
+Idents(Atlas) <- "cell.type.final"
+p1 <- DimPlot(Atlas, cols = palette) + NoLegend() + theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank())
+ggsave(filename = "Visuals/TrophoblastAtlas_Rabbit_UMAP.png", plot = p1, width = 6, height = 4)
+ggsave(filename = "Visuals/TrophoblastAtlas_Rabbit_UMAP.pdf", plot = p1, width = 6, height = 4)
+
+## Clear up
+rm(list = setdiff(ls(), c("palette")))
+```
+## Guinea Pig Atlas
+```{r}
+Atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/GuineaPigTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+## Extracting trophoblasts and renaming to match the palette
+Atlas@meta.data$cell.type.final <- Atlas@meta.data %>%
+  mutate(cell.type.final = case_when(cell.type.short == "InvTroph" ~ "Invasive trophoblast (guinea pig)",
+                                     cell.type.short == "TrophProg" ~ "CTB",
+                                     cell.type.short == "STB" ~ "STB (guinea pig)")) %>%
+  pull(cell.type.final)
+
+## Assigning identity
+Idents(Atlas) <- "cell.type.final"
+p1 <- DimPlot(Atlas, cols = palette) + NoLegend() + theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank())
+ggsave(filename = "Visuals/TrophoblastAtlas_GuineaPig_UMAP.png", plot = p1, width = 6, height = 4)
+ggsave(filename = "Visuals/TrophoblastAtlas_GuineaPig_UMAP.pdf", plot = p1, width = 6, height = 4)
+
+## Clear up
+rm(list = setdiff(ls(), c("palette")))
+```
+## Create a legend for the plots above
+```{r}
+legend_data <- data.frame(cell_type = names(palette), color = palette)
+rownames(legend_data) <- NULL
+legend_data$category <- c(rep("Progenitors", 3), rep("Multinucleated", 6), rep("Migratory", 7), rep("Other", 3))
+legend_data$y <- c(10:8, 6:1, 10:4, 2:0)
+legend_data$x <- c(rep(-0.3,9), rep(1,10))
+legend_data
+
+## Dummy plot
+p_legend <- ggplot(legend_data, aes(x = x, y = y)) +
+  geom_point(aes(color = cell_type), size = 5) +  # colored box
+  geom_text(aes(label = cell_type), hjust = 0, nudge_x = 0.2, size = 4) + # cell type labels
+  scale_color_manual(values = setNames(legend_data$color, legend_data$cell_type)) +
+  # Add category headers as text (we place them manually)
+  geom_text(
+    data = subset(legend_data, !duplicated(category)),
+    aes(x = x - 0.2, y = y + 1, label = category),
+    hjust = -1, vjust = 1, fontface = "bold", size = 5
+  ) +
+  xlim(-0.5, 2.25) +   # space for labels
+  theme_void() +
+  theme(legend.position = "none")
+
+
+# Save figure
+ggsave("Visuals/TrophoblastAtlases_UMAP_Legend.png", plot = p_legend, width = 6, height = 4, dpi = 300)
+```
+## Concluding
+```{r}
+sessionInfo()
+```
+
