@@ -1,0 +1,259 @@
+---
+title: "Figure 2b: Plotting cell type trees (trophoblasts)"
+author: "Marcin Falis"
+date: "May 28th, 2026"
+last_update: "October 13th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/Figure2/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+library(tidyr)
+library(tibble)
+library(ggfortify)
+library(corrr)
+library(ape)
+library(factoextra)
+library(ggdendro)
+library(lsa)
+```
+## Figure 1b: All cells, average pseudobulks (GSI, whole pseudobulk), hclust(1 - Pearson, ward.D2)
+```{r}
+## Setting seed and variables
+set.seed(999)
+corr_method <- "pearson"
+bootstrap.reps <- 1000
+
+# Loading data
+## Loading pseudobulk 1, adding the species identifier, excluding genes with 0 counts
+ref_pseudobulk <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/MouseTrophoblastAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt")
+ref_pseudobulk <- ref_pseudobulk[,!(colnames(ref_pseudobulk) %in% c("precSynTI", "precSynTII", "precSpT", "precPTGC", "precSTGC"))]
+colnames(ref_pseudobulk) <- paste0(colnames(ref_pseudobulk), "_MOU")
+to_remove <- rownames(ref_pseudobulk[rowSums(ref_pseudobulk) == 0,])
+ref_pseudobulk <- ref_pseudobulk[!(rownames(ref_pseudobulk) %in% to_remove),]
+
+## Loading pseudobulk 2, adding the species identifier, excluding genes with 0 counts
+que_pseudobulk <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/RatTrophoblastAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt")
+que_pseudobulk <- que_pseudobulk[,!(colnames(que_pseudobulk) %in% c("precSynTI", "precPTGC", "precSTGC"))]
+colnames(que_pseudobulk) <- paste0(colnames(que_pseudobulk), "_RAT")
+to_remove <- rownames(que_pseudobulk[rowSums(que_pseudobulk) == 0,])
+que_pseudobulk <- que_pseudobulk[!(rownames(que_pseudobulk) %in% to_remove),]
+
+## Loading pseudobulk 3, adding the species identifier, excluding genes with 0 counts
+que_pseudobulk_2 <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/RabbitTrophoblastAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt")
+que_pseudobulk_2 <- que_pseudobulk_2[,!(colnames(que_pseudobulk_2) %in% c("fCTB"))]
+colnames(que_pseudobulk_2) <- paste0(colnames(que_pseudobulk_2), "_RAB")
+to_remove <- rownames(que_pseudobulk_2[rowSums(que_pseudobulk_2) == 0,])
+que_pseudobulk_2 <- que_pseudobulk_2[!(rownames(que_pseudobulk_2) %in% to_remove),]
+
+## Loading pseudobulk 4, retaining only ensembl IDs, adding the species identifier, excluding genes with 0 counts
+que_pseudobulk_3 <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/HumanTrophoblastAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt")
+que_pseudobulk_3 <- que_pseudobulk_3[,!(colnames(que_pseudobulk_3) %in% c("fCTB", "cCTB"))]
+colnames(que_pseudobulk_3) <- paste0(colnames(que_pseudobulk_3), "_HUM")
+to_remove <- rownames(que_pseudobulk_3[rowSums(que_pseudobulk_3) == 0,])
+que_pseudobulk_3 <- que_pseudobulk_3[!(rownames(que_pseudobulk_3) %in% to_remove),]
+
+## Loading pseudobulk 5, retaining only ensembl IDs, adding the species identifier, excluding genes with 0 counts
+que_pseudobulk_4 <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/MarmosetTrophoblastAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt")
+que_pseudobulk_4 <- que_pseudobulk_4[,!(colnames(que_pseudobulk_4) %in% c("fCTB"))]
+colnames(que_pseudobulk_4) <- paste0(colnames(que_pseudobulk_4), "_MAR")
+to_remove <- rownames(que_pseudobulk_4[rowSums(que_pseudobulk_4) == 0,])
+que_pseudobulk_4 <- que_pseudobulk_4[!(rownames(que_pseudobulk_4) %in% to_remove),]
+
+## Loading pseudobulk 6, retaining only ensembl IDs, adding the species identifier, excluding genes with 0 counts
+  que_pseudobulk_5 <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/GuineaPigTrophoblastAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt")
+colnames(que_pseudobulk_5) <- paste0(colnames(que_pseudobulk_5), "_GUI")
+to_remove <- rownames(que_pseudobulk_5[rowSums(que_pseudobulk_5) == 0,])
+que_pseudobulk_5 <- que_pseudobulk_5[!(rownames(que_pseudobulk_5) %in% to_remove),]
+
+## Loading the orthology reference table
+one_to_one_list <- read.table("../ReferenceFiles/OrthologyLists/Homology_1to1/MouseRatRabbitHumanMarmosetGuineaPig_Homology_1to1_r105.txt")
+colnames(one_to_one_list) <- c("Reference.ensembl.ID", "Query.ensembl.ID", "Query.homology.type", "Query.2.ensembl.ID", "Query.2.homology.type", "Query.3.ensembl.ID", "Query.3.homology.type", "Query.4.ensembl.ID", "Query.4.homology.type", "Query.5.ensembl.ID", "Query.5.homology.type")
+
+## Filtering out genes which are labeled as one_to_one but have more matches (ENSEMBL mistake)
+index <- duplicated(one_to_one_list$Reference.ensembl.ID)
+one_to_one_list <- one_to_one_list[!(index),]
+
+## Retaining one-to-one orthologs only
+ref_pseudobulk <- ref_pseudobulk %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Reference.ensembl.ID)
+que_pseudobulk <- que_pseudobulk %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Query.ensembl.ID)
+que_pseudobulk_2 <- que_pseudobulk_2 %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Query.2.ensembl.ID)
+que_pseudobulk_3 <- que_pseudobulk_3 %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Query.3.ensembl.ID)
+que_pseudobulk_4 <- que_pseudobulk_4 %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Query.4.ensembl.ID)
+que_pseudobulk_5 <- que_pseudobulk_5 %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Query.5.ensembl.ID)
+
+### Replace the query names with reference equivalents
+que_pseudobulk <- left_join(que_pseudobulk, (one_to_one_list %>% dplyr::select(Reference.ensembl.ID, Query.ensembl.ID)), by = c("rowname" = "Query.ensembl.ID")) %>% dplyr::select(Reference.ensembl.ID, everything(), -rowname)
+que_pseudobulk_2 <- left_join(que_pseudobulk_2, (one_to_one_list %>% dplyr::select(Reference.ensembl.ID, Query.2.ensembl.ID)), by = c("rowname" = "Query.2.ensembl.ID")) %>% dplyr::select(Reference.ensembl.ID, everything(), -rowname)
+que_pseudobulk_3 <- left_join(que_pseudobulk_3, (one_to_one_list %>% dplyr::select(Reference.ensembl.ID, Query.3.ensembl.ID)), by = c("rowname" = "Query.3.ensembl.ID")) %>% dplyr::select(Reference.ensembl.ID, everything(), -rowname)
+que_pseudobulk_4 <- left_join(que_pseudobulk_4, (one_to_one_list %>% dplyr::select(Reference.ensembl.ID, Query.4.ensembl.ID)), by = c("rowname" = "Query.4.ensembl.ID")) %>% dplyr::select(Reference.ensembl.ID, everything(), -rowname)
+que_pseudobulk_5 <- left_join(que_pseudobulk_5, (one_to_one_list %>% dplyr::select(Reference.ensembl.ID, Query.5.ensembl.ID)), by = c("rowname" = "Query.5.ensembl.ID")) %>% dplyr::select(Reference.ensembl.ID, everything(), -rowname)
+
+### Obtaining genes that are common to both species
+genes_to_use <- intersect(ref_pseudobulk$rowname, que_pseudobulk$Reference.ensembl.ID)
+genes_to_use <- intersect(que_pseudobulk_2$Reference.ensembl.ID, genes_to_use)
+genes_to_use <- intersect(que_pseudobulk_3$Reference.ensembl.ID, genes_to_use)
+genes_to_use <- intersect(que_pseudobulk_4$Reference.ensembl.ID, genes_to_use)
+genes_to_use <- intersect(que_pseudobulk_5$Reference.ensembl.ID, genes_to_use)
+
+## Filtering and reordering the genes in each pseudobulk
+ref_pseudobulk <- ref_pseudobulk %>% dplyr::filter(rowname %in% genes_to_use) %>% column_to_rownames(var = "rowname")
+que_pseudobulk <- que_pseudobulk %>% dplyr::filter(Reference.ensembl.ID %in% genes_to_use) %>% column_to_rownames("Reference.ensembl.ID")
+que_pseudobulk_2 <- que_pseudobulk_2 %>% dplyr::filter(Reference.ensembl.ID %in% genes_to_use) %>% column_to_rownames("Reference.ensembl.ID")
+que_pseudobulk_3 <- que_pseudobulk_3 %>% dplyr::filter(Reference.ensembl.ID %in% genes_to_use) %>% column_to_rownames("Reference.ensembl.ID")
+que_pseudobulk_4 <- que_pseudobulk_4 %>% dplyr::filter(Reference.ensembl.ID %in% genes_to_use) %>% column_to_rownames("Reference.ensembl.ID")
+que_pseudobulk_5 <- que_pseudobulk_5 %>% dplyr::filter(Reference.ensembl.ID %in% genes_to_use) %>% column_to_rownames("Reference.ensembl.ID")
+que_pseudobulk <- que_pseudobulk[rownames(ref_pseudobulk),]
+que_pseudobulk_2 <- que_pseudobulk_2[rownames(ref_pseudobulk),]
+que_pseudobulk_3 <- que_pseudobulk_3[rownames(ref_pseudobulk),]
+que_pseudobulk_4 <- que_pseudobulk_4[rownames(ref_pseudobulk),]
+que_pseudobulk_5 <- que_pseudobulk_5[rownames(ref_pseudobulk),]
+
+## Sanity check
+test <- identical(rownames(ref_pseudobulk), rownames(que_pseudobulk))
+test2 <- identical(rownames(ref_pseudobulk), rownames(que_pseudobulk_2))
+test3 <- identical(rownames(ref_pseudobulk), rownames(que_pseudobulk_3))
+test4 <- identical(rownames(ref_pseudobulk), rownames(que_pseudobulk_4))
+test5 <- identical(rownames(ref_pseudobulk), rownames(que_pseudobulk_5))
+if (test == TRUE & test2 == TRUE & test3 == TRUE & test4 == TRUE & test5) {
+  print("Sanity check passed. Proceeding to plotting.")
+} else {
+  stop("Sanity check failed.The pseudobulks do not contain the same genes/have a different order of genes. Exiting.")
+}
+
+# Transformation
+## GSI
+ref_pseudobulk_gsi <- sweep(ref_pseudobulk, 1, rowMeans(ref_pseudobulk), "/")
+que_pseudobulk_gsi <- sweep(que_pseudobulk, 1, rowMeans(que_pseudobulk), "/")
+que_pseudobulk_2_gsi <- sweep(que_pseudobulk_2, 1, rowMeans(que_pseudobulk_2), "/")
+que_pseudobulk_3_gsi <- sweep(que_pseudobulk_3, 1, rowMeans(que_pseudobulk_3), "/")
+que_pseudobulk_4_gsi <- sweep(que_pseudobulk_4, 1, rowMeans(que_pseudobulk_4), "/")
+que_pseudobulk_5_gsi <- sweep(que_pseudobulk_5, 1, rowMeans(que_pseudobulk_5), "/")
+
+## Removing unnecessarly objects
+rm(ref_pseudobulk, que_pseudobulk, que_pseudobulk_2, que_pseudobulk_3, que_pseudobulk_4, que_pseudobulk_5)
+
+## Merging
+ref_pseudobulk_gsi <- ref_pseudobulk_gsi %>% rownames_to_column()
+que_pseudobulk_gsi <- que_pseudobulk_gsi %>% rownames_to_column()
+que_pseudobulk_2_gsi <- que_pseudobulk_2_gsi %>% rownames_to_column()
+que_pseudobulk_3_gsi <- que_pseudobulk_3_gsi %>% rownames_to_column()
+que_pseudobulk_4_gsi <- que_pseudobulk_4_gsi %>% rownames_to_column()
+que_pseudobulk_5_gsi <- que_pseudobulk_5_gsi %>% rownames_to_column()
+pseud_gsi_final <- left_join(ref_pseudobulk_gsi, que_pseudobulk_gsi, by="rowname")
+pseud_gsi_final <- left_join(pseud_gsi_final, que_pseudobulk_2_gsi, by="rowname")
+pseud_gsi_final <- left_join(pseud_gsi_final, que_pseudobulk_3_gsi, by="rowname")
+pseud_gsi_final <- left_join(pseud_gsi_final, que_pseudobulk_4_gsi, by="rowname")
+pseud_gsi_final <- left_join(pseud_gsi_final, que_pseudobulk_5_gsi, by="rowname") %>% column_to_rownames("rowname")
+
+## Emptying the environment
+rm(list = setdiff(ls(), c("pseud_gsi_final", "corr_method", "bootstrap.reps")))
+
+## Sanity check: division by zero during GSI transformation
+test <- any(is.na(pseud_gsi_final))
+if (test == FALSE) {
+  print("Sanity check passed. No divisions by zero during GSI transformation. Proceeding to plotting.")
+} else {
+  stop("Sanity check failed. A division by zero occurred, creating NA values in the transformed pseudobulk. Address the problem")
+}
+
+## Clustering with bootstrap (following Murat et al., 2022)
+data <- pseud_gsi_final
+n_genes <- nrow(data)
+
+## Plotting the trees with 1000 bootstraps (credits: F. Murat, spermatogenesis paper from the Kaessmann Lab)
+mytrees <- list() 
+length(mytrees) <- bootstrap.reps
+
+for(i in 1:bootstrap.reps) {
+  sampled.data <- data[sample(x = 1:dim(data)[1], size = dim(data)[1], replace = TRUE), ] # bootstrap gene indexes (sample with replacement)
+  stopifnot(dim(sampled.data)[1] == dim(data)[1])
+  corr_data <- sampled.data %>% correlate(method = corr_method, diagonal = 1, quiet = T) %>% column_to_rownames("term")
+  corr_data <- as.dist(1 - corr_data)
+  this.tree <- as.phylo(hclust(d = corr_data, method = "ward.D2"))
+  mytrees[[i]] <- this.tree
+}
+
+boot <- NULL
+clad <- NULL
+
+# Parsing trees
+Sum <- c()
+for(i in 1:bootstrap.reps) {
+  
+  boot <- prop.clades(mytrees[[i]], part = prop.part(mytrees, check.labels = T),rooted = F)
+  Sum <- c(Sum,sum(boot))
+}
+
+Sum_ID <- Sum %>%
+  as.data.frame() %>% 
+  rownames_to_column() %>%
+  dplyr::rename(Tree_ID = rowname) %>%
+  dplyr::rename(Sum = ".") %>%
+  arrange( desc( Sum ))
+Priority <- 1
+boot <- prop.clades( mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]] , part = prop.part(mytrees, check.labels = T), rooted = F) # get bootstrap values from the list of trees
+
+# Assigning colors to nodes according to boostrap values
+for (i in 1:length(boot)) {
+  mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]] $label_[i] <- boot[i]/bootstrap.reps
+  
+  if (!is.na(boot[i]) & boot[i]/bootstrap.reps > 0.9) { 
+    mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]]$boot.color[i] <- "chartreuse3"
+  } else if(boot[i]/bootstrap.reps > 0.7) { 
+    mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]]$boot.color[i] <- "darkgoldenrod1"
+  } else if(boot[i]/bootstrap.reps > 0.5) { 
+    mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]]$boot.color[i] <- "darkorange1"
+  } else {
+    mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]]$boot.color[i] <- "red"
+  }
+}
+
+## Adding colors to labels
+tree_labels <- gsub(pattern = "_.*", replacement = "", x = mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]]$tip.label)
+names(tree_labels) <- mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]]$tip.label
+groups <- tree_labels %>% as.data.frame() %>% rename("cell.type" = ".") %>% mutate(group = case_when(cell.type %in% c("JZTP", "LaTP", "CTB", "TrophProg") ~ "Progenitors", 
+                                                                                                     cell.type %in% c("GlyT", "SpATGC", "InvTroph", "EVT") ~ "Migratory",
+                                                                                                     cell.type %in% c("STB", "SynTI", "SynTII") ~ "Multinucleated", 
+                                                                                                     cell.type %in% c("SpT", "STGC") ~ "Other")) %>% pull(group)
+group_colors <- c("Migratory" = "#C982B8", "Multinucleated" = "#08418F", "Progenitors" = "#E69500", "Other" = "#1D7874")
+tip_colors <- group_colors[groups]
+
+### Plotting
+png(file = paste0("Visuals/2b_TrophoblastPhylogeny_WholePseudobulk_GSI_", corr_method, "_ngenes", n_genes, ".png"), width = 4500, height = 5500, res = 300)
+plot(mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]] , cex = 3, edge.width = 3, label.offset = 0.03, no.margin = T, font = 2, tip.color = tip_colors, underscore = T)
+nodelabels(pch = 21, col = "black", bg = mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]] $boot.color, cex = 3)
+legend(legend = c("> 0.9", "> 0.7", " > 0.5", "< 0.5"), col = c("chartreuse3", "darkgoldenrod1", "darkorange1", "red"), pch = 19, x = "topleft", title = "Bootstrap", inset = c(0.04, 0.12), pt.cex = 3, cex = 2.75, bty = "n", title.font = 2, title.cex = 2.75, y.intersp = 0.7)
+legend(legend = c("Migratory", "Multinucleated", "Progenitors", "Other"), col = c("#C982B8", "#08418F", "#E69500", "#1D7874"), pch = 19, x = "topleft", title = "Characteristic", pt.cex = 3, cex = 2.75, bty = "n", title.font = 2,  title.cex = 2.75, y.intersp = 0.7)
+dev.off()
+
+### Plotting
+pdf(file = paste0("Visuals/2b_TrophoblastPhylogeny_WholePseudobulk_GSI_", corr_method, "_ngenes", n_genes, ".pdf"), width = 14, height = 16)
+plot(mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]] , cex = 3, edge.width = 3, label.offset = 0.03, no.margin = T, font = 2, tip.color = tip_colors, underscore = T)
+nodelabels(pch = 21, col = "black", bg = mytrees[[ as.integer(Sum_ID[Priority,"Tree_ID"]) ]] $boot.color, cex = 3)
+legend(legend = c("> 0.9", "> 0.7", " > 0.5", "< 0.5"), col = c("chartreuse3", "darkgoldenrod1", "darkorange1", "red"), pch = 19, x = "topleft", title = "Bootstrap", inset = c(0.03, 0.13), pt.cex = 3, cex = 2.5, bty = "n", title.font = 2, title.cex = 2.5, y.intersp = 0.7)
+legend(legend = c("Migratory", "Multinucleated", "Progenitors", "Other"), col = c("#C982B8", "#08418F", "#E69500", "#1D7874"), pch = 19, x = "topleft", title = "Characteristic", pt.cex = 3, cex = 2.5, bty = "n", title.font = 2,  title.cex = 2.5, y.intersp = 0.7)
+dev.off()
+
+## Emptying the environment
+rm(list = ls())
+```
