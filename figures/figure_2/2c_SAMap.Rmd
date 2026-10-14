@@ -1,0 +1,118 @@
+---
+title: "2c: Plotting SAMap values for trophoblast atlases"
+author: "Marcin Falis"
+date: "May 28th, 2026"
+last_update: "October 13th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/Figure2/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+library(tidyr)
+library(biomaRt)
+library(edgeR)
+library(tibble)
+library(ggdendro)
+library(factoextra)
+library(ggfortify)
+library(ComplexHeatmap)
+library(circlize)
+```
+## Figure 2c: Heatmap, no precursors
+```{r}
+mapping_scores <- read.csv("~/Scratch_MF/2026_Falis_et_al/Figure2/2c/SixSpecies_CellType_MappingScores.txt")
+mapping_scores <- mapping_scores %>% column_to_rownames("X") %>% as.matrix()
+
+## Excluding the results involving precursors
+to_exclude <- c("mm_precPTGC", "mm_precSTGC", "mm_precSpT", "mm_precSynTI", "mm_precSynTII", "rn_precPTGC", "rn_precSTGC", "hs_cCTB", "hs_fCTB", "cj_fCTB", "oc_SynTIILike", "rn_precSynTI")
+mapping_scores <- mapping_scores[!(rownames(mapping_scores) %in% to_exclude), !(colnames(mapping_scores) %in% to_exclude)]
+
+## adjusting species names
+colnames(mapping_scores) <- gsub(pattern = "hs_", replacement = "HUM_", x = gsub(pattern = "cj_", replacement = "MAR_", x = gsub(pattern = "oc_", replacement = "RAB_", x = gsub(pattern = "cp_", replacement = "GUI_", x = gsub(pattern = "mm_", replacement = "MOU_", x = gsub(pattern = "rn_", replacement = "RAT_", x = colnames(mapping_scores)))))))
+rownames(mapping_scores) <- colnames(mapping_scores)
+
+# Adding row annotation
+row_groups <- gsub(pattern = ".*_", replacement = '', x = rownames(mapping_scores))
+row_groups <- row_groups %>%
+  as.data.frame() %>%
+  rename("cell.type" = ".") %>%
+  mutate(group = case_when(cell.type %in% c("CTB", "LaTP", "TrophProg", "JZTP") ~ "Progenitors",
+                           cell.type %in% c("STB", "SynTI", "SynTII") ~ "Multinucleated",
+                           cell.type %in% c("EVT", "SpATGC", "InvTroph", "GlyT") ~ "Migratory",
+                           cell.type %in% c("SpT", "STGC") ~ "Other")) %>%
+  pull(group)
+col_groups <- row_groups
+group_colors <- c("Migratory" = "#C982B8", "Multinucleated" = "#08418F", "Progenitors" = "#E69500", "Other" = "#1D7874")
+
+
+row_anno <- rowAnnotation(
+  CellClass = row_groups,
+  col = list(CellClass = group_colors), 
+  show_legend = FALSE,
+  show_annotation_name = FALSE
+)
+
+col_anno <- HeatmapAnnotation(
+  CellClass = col_groups,
+  col = list(CellClass = group_colors),
+  show_legend = FALSE,
+  show_annotation_name = FALSE
+)
+
+p <- Heatmap(
+  mapping_scores,
+  name = "Mapping Score",
+  col = colorRamp2(c(0, 1), c("white", "darkgreen")),
+  clustering_method_rows = "ward.D2",
+  clustering_method_columns = "ward.D2",
+  show_column_names = TRUE,
+  show_row_names = FALSE,
+  show_column_dend = TRUE,
+  show_row_dend = TRUE,
+  right_annotation = row_anno,
+  bottom_annotation = col_anno,
+  column_names_rot = 90,
+  column_names_gp = gpar(fontsize = 22),
+  heatmap_legend_param = list(
+    title_gp = gpar(fontsize = 25, fontface = "bold"),
+    labels_gp = gpar(fontsize = 25),
+    color_bar = "continuous",
+    border = NA,
+    legend_height = unit(6, "cm"),
+    legend_width = unit(10, "cm"),
+    grid_width = unit(0.6, "cm"),
+    title_position = "topcenter",
+    direction = "horizontal"))
+
+
+png("Visuals/2c_SAMap_TrophoblastNoPrecursors_Heatmap.png", width = 4500, height = 4500, res = 300)
+draw(p, padding = unit(c(5, 5, 5, 5), "mm"), heatmap_legend_side = "bottom")
+dev.off()
+
+pdf("Visuals/2c_SAMap_TrophoblastNoPrecursors_Heatmap.pdf", width = 10, height = 11)
+draw(p, padding = unit(c(5, 5, 5, 5), "mm"), heatmap_legend_side = "bottom")
+dev.off()
+
+## Clean up
+rm(list = ls())
+```
+
