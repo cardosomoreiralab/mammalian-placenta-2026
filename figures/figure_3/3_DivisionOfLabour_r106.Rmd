@@ -1,0 +1,678 @@
+---
+title: "Figure 3: Division of Labour (using sets from release 106)"
+author: "Marcin Falis"
+date: "June 16th, 2026"
+last_update: "October 24th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/Figure3/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(ggplot2)
+library(tidyr)
+```
+# Version 2: Precursors merged, mean, reference data from r105
+## Mouse
+```{r}
+## Define list of species
+species <- "Mouse"
+nbin <- 24
+ctrl <- 100
+psgs <- c(
+  "ENSMUSG00000108307-Ceacam-ps1",
+  "ENSMUSG00000074272-Ceacam1",
+  "ENSMUSG00000054385-Ceacam2",
+  "ENSMUSG00000053228-Ceacam3",
+  "ENSMUSG00000008789-Ceacam5",
+  "ENSMUSG00000007209-Ceacam9",
+  "ENSMUSG00000054169-Ceacam10",
+  "ENSMUSG00000030368-Ceacam11",
+  "ENSMUSG00000030366-Ceacam12",
+  "ENSMUSG00000057195-Ceacam13",
+  "ENSMUSG00000023185-Ceacam14",
+  "ENSMUSG00000078795-Ceacam15",
+  "ENSMUSG00000014686-Ceacam16",
+  "ENSMUSG00000030472-Ceacam18",
+  "ENSMUSG00000049848-Ceacam19",
+  "ENSMUSG00000070777-Ceacam20",
+  "ENSMUSG00000108558-Psg-ps1",
+  "ENSMUSG00000066760-Psg16",
+  "ENSMUSG00000004540-Psg17",
+  "ENSMUSG00000003505-Psg18",
+  "ENSMUSG00000004542-Psg19",
+  "ENSMUSG00000063305-Psg20",
+  "ENSMUSG00000070796-Psg21",
+  "ENSMUSG00000044903-Psg22",
+  "ENSMUSG00000074359-Psg23",
+  "ENSMUSG00000070798-Psg25",
+  "ENSMUSG00000070799-Psg26",
+  "ENSMUSG00000070797-Psg27",
+  "ENSMUSG00000030373-Psg28",
+  "ENSMUSG00000023159-Psg29",
+  "ENSMUSG00000078793-Gm5155")
+
+## Loading the atlas
+Atlas <- readRDS(paste0("../ReferenceFiles/Atlases/Trophoblast/", species, "TrophoblastAtlas_FinalVersion_26thMay2026.rds"))
+
+## Adding a new classification for cell types
+Atlas@meta.data$cell.type.for.modules <- Atlas@meta.data %>%
+  dplyr::mutate(cell.type.for.modules = case_when(cell.type.short %in% c("precSTGC", "STGC") ~ "STGC",
+                                                  cell.type.short %in% c("precSynTI", "SynTI") ~ "SynTI",
+                                                  cell.type.short %in% c("precSynTII", "SynTII") ~ "SynTII",
+                                                  cell.type.short %in% c("precSpT", "SpT") ~ "SpT",
+                                                  .default = cell.type.short)) %>%
+  pull(cell.type.for.modules)
+Idents(Atlas) <- "cell.type.for.modules"
+
+## Loading pre-computed sets of genes and scoring
+module_files <- list.files(path = paste0("~/Scratch_MF/2026_Falis_et_al/Figure3/ReferenceData/r106/", species),
+                           pattern = "[0-9]\\.rds$",
+                           full.names = TRUE)
+module_lists <- lapply(X = module_files, FUN = readRDS)
+names(module_lists) <- gsub(pattern = ".rds", replacement = '', x = gsub(pattern = ".*_", replacement = '', x = module_files))
+
+## Make a look-up table for ENSEMBL_ID <--> Atlas_name
+lookup_table <- rownames(Atlas) %>% 
+  as.data.frame() %>% 
+  dplyr::rename("atlas_gene_name" = ".") %>%
+  dplyr::mutate("ensembl_id" = gsub(pattern = "-.*", replacement = "", x = atlas_gene_name))
+
+## Lists
+module_lists <- lapply(module_lists, FUN = function(x) x %>% pull(ensembl_gene_id))
+
+## Subset to genes present in the atlas
+modules_to_be_scored <- lapply(X = module_lists, FUN = function(x) lookup_table %>%
+         dplyr::filter(ensembl_id %in% x) %>%
+         pull(atlas_gene_name))
+names(modules_to_be_scored) <- names(module_lists)
+
+## Sanity check: what fraction of modules are we loosing due to genes not being captured
+sanity_check <- data.frame(module = names(module_lists),
+fraction_found = sapply(modules_to_be_scored, length) / sapply(module_lists, length),
+row.names = NULL)
+print(sanity_check)
+
+## Scoring the modules
+for (i in seq_along(modules_to_be_scored)) {
+  Atlas <- AddModuleScore(Atlas,
+                          features = list(modules_to_be_scored[[i]]),
+                          name = names(modules_to_be_scored)[i],
+                          nbin = nbin,
+                          ctrl = ctrl)
+}
+
+## Module 8: Pregnancy-specific glycoproteins
+Atlas <- AddModuleScore(Atlas, list(psgs), name = "PSG_Ceacam", nbin = nbin, ctrl = ctrl)
+
+score_cols <- tail(colnames(Atlas@meta.data), length(modules_to_be_scored)+1)
+  
+mean_scores <- Atlas@meta.data %>%
+  group_by(cell.type.for.modules) %>%     # your cell type identity column
+  summarise(across(all_of(score_cols), mean), .groups = "drop") %>%
+  pivot_longer(-cell.type.for.modules, names_to = "module", values_to = "mean_score")
+
+mean_scores <- mean_scores %>%
+  group_by(module) %>%
+  mutate(z_score = as.numeric(scale(mean_score))) %>%
+  ungroup()
+
+mean_scores$module <- sub("1$", "", mean_scores$module)
+
+## Save data
+write.table(x = mean_scores, file = paste0("Data/r106/", species,"_nbin", nbin, "_nctrl", ctrl, "_precursorsmerged_meanscores.txt"))
+
+## Emptying the environment
+rm(list = ls())
+```
+## Rat
+```{r}
+## Define list of species
+species <- "Rat"
+nbin <- 24
+ctrl <- 100
+psgs <- c("ENSRNOG00000027288-Psgb1",
+                "ENSRNOG00000038101-LOC102557319",
+                "ENSRNOG00000029485-Psg29",
+                "ENSRNOG00000020578-Ceacam1",
+                "ENSRNOG00000027607-Ceacam3",
+                "ENSRNOG00000046222-Ceacam4",
+                "ENSRNOG00000030331-Ceacam6",
+                "ENSRNOG00000046915-Ceacam9",
+                "ENSRNOG00000017620-Ceacam11",
+                "ENSRNOG00000042158-Ceacam12",
+                "ENSRNOG00000031391-Ceacam16",
+                "ENSRNOG00000022701-Ceacam18",
+                "ENSRNOG00000043088-Ceacam19",
+                "ENSRNOG00000019260-Ceacam20",
+                "ENSRNOG00000034000-AABR07002659.1",
+                "ENSRNOG00000017519-LOC102557244")
+
+## Loading the atlas
+Atlas <- readRDS(paste0("../ReferenceFiles/Atlases/Trophoblast/", species, "TrophoblastAtlas_FinalVersion_26thMay2026.rds"))
+
+## Adding a new classification for cell types
+Atlas@meta.data$cell.type.for.modules <- Atlas@meta.data %>%
+  dplyr::mutate(cell.type.for.modules = case_when(cell.type.short %in% c("precSTGC", "STGC") ~ "STGC",
+                                                  cell.type.short %in% c("precSynTI", "SynTI") ~ "SynTI",
+                                                  cell.type.short %in% c("precSynTII", "SynTII") ~ "SynTII",
+                                                  cell.type.short %in% c("precSpT", "SpT") ~ "SpT",
+                                                  .default = cell.type.short)) %>%
+  pull(cell.type.for.modules)
+Idents(Atlas) <- "cell.type.for.modules"
+
+## Loading pre-computed sets of genes and scoring
+module_files <- list.files(path = paste0("~/Scratch_MF/2026_Falis_et_al/Figure3/ReferenceData/r106/", species),
+                           pattern = "[0-9]\\.rds$",
+                           full.names = TRUE)
+module_lists <- lapply(X = module_files, FUN = readRDS)
+names(module_lists) <- gsub(pattern = ".rds", replacement = '', x = gsub(pattern = ".*_", replacement = '', x = module_files))
+
+## Make a look-up table for ENSEMBL_ID <--> Atlas_name
+lookup_table <- rownames(Atlas) %>% 
+  as.data.frame() %>% 
+  dplyr::rename("atlas_gene_name" = ".") %>%
+  dplyr::mutate("ensembl_id" = gsub(pattern = "-.*", replacement = "", x = atlas_gene_name))
+
+## Lists
+module_lists <- lapply(module_lists, FUN = function(x) x %>% pull(ensembl_gene_id))
+
+## Subset to genes present in the atlas
+modules_to_be_scored <- lapply(X = module_lists, FUN = function(x) lookup_table %>%
+         dplyr::filter(ensembl_id %in% x) %>%
+         pull(atlas_gene_name))
+names(modules_to_be_scored) <- names(module_lists)
+
+## Sanity check: what fraction of modules are we loosing due to genes not being captured
+sanity_check <- data.frame(module = names(module_lists),
+fraction_found = sapply(modules_to_be_scored, length) / sapply(module_lists, length),
+row.names = NULL)
+print(sanity_check)
+
+## Scoring the modules
+for (i in seq_along(modules_to_be_scored)) {
+  Atlas <- AddModuleScore(Atlas,
+                          features = list(modules_to_be_scored[[i]]),
+                          name = names(modules_to_be_scored)[i],
+                          nbin = nbin,
+                          ctrl = ctrl)
+}
+
+## Module 8: Pregnancy-specific glycoproteins
+Atlas <- AddModuleScore(Atlas, list(psgs), name = "PSG_Ceacam", nbin = nbin, ctrl = ctrl)
+
+score_cols <- tail(colnames(Atlas@meta.data), length(modules_to_be_scored)+1)
+  
+mean_scores <- Atlas@meta.data %>%
+  group_by(cell.type.for.modules) %>%     # your cell type identity column
+  summarise(across(all_of(score_cols), mean), .groups = "drop") %>%
+  pivot_longer(-cell.type.for.modules, names_to = "module", values_to = "mean_score")
+
+mean_scores <- mean_scores %>%
+  group_by(module) %>%
+  mutate(z_score = as.numeric(scale(mean_score))) %>%
+  ungroup()
+
+mean_scores$module <- sub("1$", "", mean_scores$module)
+
+## Save data
+write.table(x = mean_scores, file = paste0("Data/r106/", species,"_nbin", nbin, "_nctrl", ctrl, "_precursorsmerged_meanscores.txt"))
+
+## Emptying the environment
+rm(list = ls())
+```
+## Human
+```{r}
+## Define list of species
+species <- "Human"
+nbin <- 24
+ctrl <- 100
+psgs <- c(
+  "ENSG00000079385-CEACAM1",
+  "ENSG00000170956-CEACAM3",
+  "ENSG00000105352-CEACAM4",
+  "ENSG00000105388-CEACAM5",
+  "ENSG00000086548-CEACAM6",
+  "ENSG00000007306-CEACAM7",
+  "ENSG00000124469-CEACAM8",
+  "ENSG00000213892-CEACAM16",
+  "ENSG00000266903-CEACAM16-AS1",
+  "ENSG00000213822-CEACAM18",
+  "ENSG00000186567-CEACAM19",
+  "ENSG00000273777-CEACAM20",
+  "ENSG00000007129-CEACAM21",
+  "ENSG00000230666-CEACAM22P",
+  "ENSG00000231561-CEACAMP5",
+  "ENSG00000236932-CEACAMP8",
+  "ENSG00000230529-CEACAMP9",
+  "ENSG00000241104-CEACAMP10",
+  "ENSG00000236123-CEACAMP11",
+  "ENSG00000231924-PSG1",
+  "ENSG00000242221-PSG2",
+  "ENSG00000221826-PSG3",
+  "ENSG00000243137-PSG4",
+  "ENSG00000204941-PSG5",
+  "ENSG00000170848-PSG6",
+  "ENSG00000221878-PSG7",
+  "ENSG00000124467-PSG8",
+  "ENSG00000225877-PSG8-AS1",
+  "ENSG00000183668-PSG9",
+  "ENSG00000248257-PSG10P",
+  "ENSG00000243130-PSG11")
+  
+## Loading the atlas
+Atlas <- readRDS(paste0("../ReferenceFiles/Atlases/Trophoblast/", species, "TrophoblastAtlas_FinalVersion_26thMay2026.rds"))
+
+## Adding a new classification for cell types
+Atlas@meta.data$cell.type.for.modules <- Atlas@meta.data %>%
+  dplyr::mutate(cell.type.for.modules = case_when(cell.type.short %in% c("cCTB", "EVT") ~ "EVT",
+                                                  cell.type.short %in% c("fCTB", "STB") ~ "STB",
+                                                  .default = cell.type.short)) %>%
+  pull(cell.type.for.modules)
+Idents(Atlas) <- "cell.type.for.modules"
+
+## Loading pre-computed sets of genes and scoring
+module_files <- list.files(path = paste0("~/Scratch_MF/2026_Falis_et_al/Figure3/ReferenceData/r106/", species),
+                           pattern = "[0-9]\\.rds$",
+                           full.names = TRUE)
+module_lists <- lapply(X = module_files, FUN = readRDS)
+names(module_lists) <- gsub(pattern = ".rds", replacement = '', x = gsub(pattern = ".*_", replacement = '', x = module_files))
+
+## Make a look-up table for ENSEMBL_ID <--> Atlas_name
+lookup_table <- rownames(Atlas) %>% 
+  as.data.frame() %>% 
+  dplyr::rename("atlas_gene_name" = ".") %>%
+  dplyr::mutate("ensembl_id" = gsub(pattern = "-.*", replacement = "", x = atlas_gene_name))
+
+## Lists
+module_lists <- lapply(module_lists, FUN = function(x) x %>% pull(ensembl_gene_id))
+
+## Subset to genes present in the atlas
+modules_to_be_scored <- lapply(X = module_lists, FUN = function(x) lookup_table %>%
+         dplyr::filter(ensembl_id %in% x) %>%
+         pull(atlas_gene_name))
+names(modules_to_be_scored) <- names(module_lists)
+
+## Sanity check: what fraction of modules are we loosing due to genes not being captured
+sanity_check <- data.frame(module = names(module_lists),
+fraction_found = sapply(modules_to_be_scored, length) / sapply(module_lists, length),
+row.names = NULL)
+print(sanity_check)
+
+## Scoring the modules
+for (i in seq_along(modules_to_be_scored)) {
+  Atlas <- AddModuleScore(Atlas,
+                          features = list(modules_to_be_scored[[i]]),
+                          name = names(modules_to_be_scored)[i],
+                          nbin = nbin,
+                          ctrl = ctrl)
+}
+
+## Module 8: Pregnancy-specific glycoproteins
+Atlas <- AddModuleScore(Atlas, list(psgs), name = "PSG_Ceacam", nbin = nbin, ctrl = ctrl)
+
+score_cols <- tail(colnames(Atlas@meta.data), length(modules_to_be_scored)+1)
+  
+mean_scores <- Atlas@meta.data %>%
+  group_by(cell.type.for.modules) %>%     # your cell type identity column
+  summarise(across(all_of(score_cols), mean), .groups = "drop") %>%
+  pivot_longer(-cell.type.for.modules, names_to = "module", values_to = "mean_score")
+
+mean_scores <- mean_scores %>%
+  group_by(module) %>%
+  mutate(z_score = as.numeric(scale(mean_score))) %>%
+  ungroup()
+
+mean_scores$module <- sub("1$", "", mean_scores$module)
+
+## Save data
+write.table(x = mean_scores, file = paste0("Data/r106/", species,"_nbin", nbin, "_nctrl", ctrl, "_precursorsmerged_meanscores.txt"))
+
+## Emptying the environment
+rm(list = ls())
+```
+## Marmoset
+```{r}
+## Define list of species
+species <- "Marmoset"
+nbin <- 24
+ctrl <- 100
+psgs <- c(
+  "ENSCJAG00000020206-CEACAM7",
+  "ENSCJAG00000046660-CEACAM8",
+  "ENSCJAG00000013177-CEACAM16",
+  "ENSCJAG00000018508-CEACAM18",
+  "ENSCJAG00000013193-CEACAM19",
+  "ENSCJAG00000044671-CEACAM20",
+  "ENSCJAG00000047070-ENSCJAG00000047070",
+  "ENSCJAG00000017073-ENSCJAG00000017073"
+)
+  
+## Loading the atlas
+Atlas <- readRDS(paste0("../ReferenceFiles/Atlases/Trophoblast/", species, "TrophoblastAtlas_FinalVersion_26thMay2026.rds"))
+
+## Adding a new classification for cell types
+Atlas@meta.data$cell.type.for.modules <- Atlas@meta.data %>%
+  dplyr::mutate(cell.type.for.modules = case_when(cell.type.short %in% c("cCTB", "EVT") ~ "EVT",
+                                                  cell.type.short %in% c("fCTB", "STB") ~ "STB",
+                                                  .default = cell.type.short)) %>%
+  pull(cell.type.for.modules)
+Idents(Atlas) <- "cell.type.for.modules"
+
+## Loading pre-computed sets of genes and scoring
+module_files <- list.files(path = paste0("~/Scratch_MF/2026_Falis_et_al/Figure3/ReferenceData/r106/", species),
+                           pattern = "[0-9]\\.rds$",
+                           full.names = TRUE)
+module_lists <- lapply(X = module_files, FUN = readRDS)
+names(module_lists) <- gsub(pattern = ".rds", replacement = '', x = gsub(pattern = ".*_", replacement = '', x = module_files))
+
+## Make a look-up table for ENSEMBL_ID <--> Atlas_name
+lookup_table <- rownames(Atlas) %>% 
+  as.data.frame() %>% 
+  dplyr::rename("atlas_gene_name" = ".") %>%
+  dplyr::mutate("ensembl_id" = gsub(pattern = "-.*", replacement = "", x = atlas_gene_name))
+
+## Lists
+module_lists <- lapply(module_lists, FUN = function(x) x %>% pull(ensembl_gene_id))
+
+## Subset to genes present in the atlas
+modules_to_be_scored <- lapply(X = module_lists, FUN = function(x) lookup_table %>%
+         dplyr::filter(ensembl_id %in% x) %>%
+         pull(atlas_gene_name))
+names(modules_to_be_scored) <- names(module_lists)
+
+## Sanity check: what fraction of modules are we loosing due to genes not being captured
+sanity_check <- data.frame(module = names(module_lists),
+fraction_found = sapply(modules_to_be_scored, length) / sapply(module_lists, length),
+row.names = NULL)
+print(sanity_check)
+
+## Scoring the modules
+for (i in seq_along(modules_to_be_scored)) {
+  Atlas <- AddModuleScore(Atlas,
+                          features = list(modules_to_be_scored[[i]]),
+                          name = names(modules_to_be_scored)[i],
+                          nbin = nbin,
+                          ctrl = ctrl)
+}
+
+## Module 8: Pregnancy-specific glycoproteins
+Atlas <- AddModuleScore(Atlas, list(psgs), name = "PSG_Ceacam", nbin = nbin, ctrl = ctrl)
+
+score_cols <- tail(colnames(Atlas@meta.data), length(modules_to_be_scored)+1)
+  
+mean_scores <- Atlas@meta.data %>%
+  group_by(cell.type.for.modules) %>%     # your cell type identity column
+  summarise(across(all_of(score_cols), mean), .groups = "drop") %>%
+  pivot_longer(-cell.type.for.modules, names_to = "module", values_to = "mean_score")
+
+mean_scores <- mean_scores %>%
+  group_by(module) %>%
+  mutate(z_score = as.numeric(scale(mean_score))) %>%
+  ungroup()
+
+mean_scores$module <- sub("1$", "", mean_scores$module)
+
+## Save data
+write.table(x = mean_scores, file = paste0("Data/r106/", species,"_nbin", nbin, "_nctrl", ctrl, "_precursorsmerged_meanscores.txt"))
+
+## Emptying the environment
+rm(list = ls())
+```
+## Rabbit
+```{r}
+## Define list of species
+species <- "Rabbit"
+nbin <- 24
+ctrl <- 100
+
+## Loading the atlas
+Atlas <- readRDS(paste0("../ReferenceFiles/Atlases/Trophoblast/", species, "TrophoblastAtlas_FinalVersion_26thMay2026.rds"))
+
+## Adding a new classification for cell types
+Atlas@meta.data$cell.type.for.modules <- Atlas@meta.data %>%
+  dplyr::mutate(cell.type.for.modules = case_when(cell.type.short %in% c("fCTB", "STB") ~ "STB",
+                                                  .default = cell.type.short)) %>%
+  pull(cell.type.for.modules)
+Idents(Atlas) <- "cell.type.for.modules"
+
+## Loading pre-computed sets of genes and scoring
+module_files <- list.files(path = paste0("~/Scratch_MF/2026_Falis_et_al/Figure3/ReferenceData/r106/", species),
+                           pattern = "[0-9]\\.rds$",
+                           full.names = TRUE)
+module_lists <- lapply(X = module_files, FUN = readRDS)
+names(module_lists) <- gsub(pattern = ".rds", replacement = '', x = gsub(pattern = ".*_", replacement = '', x = module_files))
+
+## Make a look-up table for ENSEMBL_ID <--> Atlas_name
+lookup_table <- rownames(Atlas) %>% 
+  as.data.frame() %>% 
+  dplyr::rename("atlas_gene_name" = ".") %>%
+  dplyr::mutate("ensembl_id" = gsub(pattern = "-.*", replacement = "", x = atlas_gene_name))
+
+## Lists
+module_lists <- lapply(module_lists, FUN = function(x) x %>% pull(ensembl_gene_id))
+
+## Subset to genes present in the atlas
+modules_to_be_scored <- lapply(X = module_lists, FUN = function(x) lookup_table %>%
+         dplyr::filter(ensembl_id %in% x) %>%
+         pull(atlas_gene_name))
+names(modules_to_be_scored) <- names(module_lists)
+
+## Sanity check: what fraction of modules are we loosing due to genes not being captured
+sanity_check <- data.frame(module = names(module_lists),
+fraction_found = sapply(modules_to_be_scored, length) / sapply(module_lists, length),
+row.names = NULL)
+print(sanity_check)
+
+## Scoring the modules
+for (i in seq_along(modules_to_be_scored)) {
+  Atlas <- AddModuleScore(Atlas,
+                          features = list(modules_to_be_scored[[i]]),
+                          name = names(modules_to_be_scored)[i],
+                          nbin = nbin,
+                          ctrl = ctrl)
+}
+
+score_cols <- tail(colnames(Atlas@meta.data), length(modules_to_be_scored))
+  
+mean_scores <- Atlas@meta.data %>%
+  group_by(cell.type.for.modules) %>%     # your cell type identity column
+  summarise(across(all_of(score_cols), mean), .groups = "drop") %>%
+  pivot_longer(-cell.type.for.modules, names_to = "module", values_to = "mean_score")
+
+mean_scores <- mean_scores %>%
+  group_by(module) %>%
+  mutate(z_score = as.numeric(scale(mean_score))) %>%
+  ungroup()
+
+mean_scores$module <- sub("1$", "", mean_scores$module)
+
+## Save data
+write.table(x = mean_scores, file = paste0("Data/r106/", species,"_nbin", nbin, "_nctrl", ctrl, "_precursorsmerged_meanscores.txt"))
+
+## Emptying the environment
+rm(list = ls())
+```
+## Guinea Pig: recomputing (although in principle no need)
+```{r}
+## Define list of species
+species <- "GuineaPig"
+nbin <- 24
+ctrl <- 100
+
+## Loading the atlas
+Atlas <- readRDS(paste0("../ReferenceFiles/Atlases/Trophoblast/", species, "TrophoblastAtlas_FinalVersion_26thMay2026.rds"))
+
+## Adding a new classification for cell types
+Atlas@meta.data$cell.type.for.modules <- Atlas@meta.data$cell.type.short
+Idents(Atlas) <- "cell.type.for.modules"
+
+## Loading pre-computed sets of genes and scoring
+module_files <- list.files(path = paste0("~/Scratch_MF/2026_Falis_et_al/Figure3/ReferenceData/r106/", species),
+                           pattern = "[0-9]\\.rds$",
+                           full.names = TRUE)
+module_lists <- lapply(X = module_files, FUN = readRDS)
+names(module_lists) <- gsub(pattern = ".rds", replacement = '', x = gsub(pattern = ".*_", replacement = '', x = module_files))
+
+## Make a look-up table for ENSEMBL_ID <--> Atlas_name
+lookup_table <- rownames(Atlas) %>% 
+  as.data.frame() %>% 
+  dplyr::rename("atlas_gene_name" = ".") %>%
+  dplyr::mutate("ensembl_id" = gsub(pattern = "-.*", replacement = "", x = atlas_gene_name))
+
+## Lists
+module_lists <- lapply(module_lists, FUN = function(x) x %>% pull(ensembl_gene_id))
+
+## Subset to genes present in the atlas
+modules_to_be_scored <- lapply(X = module_lists, FUN = function(x) lookup_table %>%
+         dplyr::filter(ensembl_id %in% x) %>%
+         pull(atlas_gene_name))
+names(modules_to_be_scored) <- names(module_lists)
+
+## Sanity check: what fraction of modules are we loosing due to genes not being captured
+sanity_check <- data.frame(module = names(module_lists),
+fraction_found = sapply(modules_to_be_scored, length) / sapply(module_lists, length),
+row.names = NULL)
+print(sanity_check)
+
+## Scoring the modules
+for (i in seq_along(modules_to_be_scored)) {
+  Atlas <- AddModuleScore(Atlas,
+                          features = list(modules_to_be_scored[[i]]),
+                          name = names(modules_to_be_scored)[i],
+                          nbin = nbin,
+                          ctrl = ctrl)
+}
+
+score_cols <- tail(colnames(Atlas@meta.data), length(modules_to_be_scored))
+  
+mean_scores <- Atlas@meta.data %>%
+  group_by(cell.type.for.modules) %>%     # your cell type identity column
+  summarise(across(all_of(score_cols), mean), .groups = "drop") %>%
+  pivot_longer(-cell.type.for.modules, names_to = "module", values_to = "mean_score")
+
+mean_scores <- mean_scores %>%
+  group_by(module) %>%
+  mutate(z_score = as.numeric(scale(mean_score))) %>%
+  ungroup()
+
+mean_scores$module <- sub("1$", "", mean_scores$module)
+
+## Save data
+write.table(x = mean_scores, file = paste0("Data/r106/", species,"_nbin", nbin, "_nctrl", ctrl, "_precursorsmerged_meanscores.txt"))
+
+## Emptying the environment
+rm(list = ls())
+```
+## Plotting
+```{r}
+mouse <- read.table(file = "Data/r106/Mouse_nbin24_nctrl100_precursorsmerged_meanscores.txt")
+mouse$species <- "Mouse"
+
+rat <- read.table(file = "Data/r106/Rat_nbin24_nctrl100_precursorsmerged_meanscores.txt")
+rat$species <- "Rat"
+
+human <- read.table(file = "Data/r106/Human_nbin24_nctrl100_precursorsmerged_meanscores.txt")
+human$species <- "Human"
+
+marmoset <- read.table(file = "Data/r106/Marmoset_nbin24_nctrl100_precursorsmerged_meanscores.txt")
+marmoset$species <- "Marmoset"
+
+rabbit <- read.table(file = "Data/r106/Rabbit_nbin24_nctrl100_precursorsmerged_meanscores.txt")
+rabbit$species <- "Rabbit"
+
+guineapig <- read.table(file = "Data/r106/GuineaPig_nbin24_nctrl100_precursorsmerged_meanscores.txt")
+guineapig$species <- "Guinea Pig"
+
+## Combining and reordering
+dfs <- rbind(mouse, rat, human, marmoset, rabbit, guineapig)
+
+## Assigning module name to GO id
+dfs <- dfs %>%
+    dplyr::mutate(module_names = case_when(module == "GO.0002682" ~ "Regulation of immune system process",
+                                           module == "GO.0005179" ~ "Hormone activity",
+                                           module == "GO.0006865" ~ "Amino acid transport",
+                                           module == "GO.0006869" ~ "Lipid transport",
+                                           module == "GO.0008643" ~ "Carbohydrate transport",
+                                           module == "GO.0048514" ~ "Blood vessel morphogenesis",
+                                           module == "GO.0046879" ~ "Hormone secretion",
+                                           module == "GO.0120178" ~ "Steroid hormone biosynthetic process",
+                                           module == "PSG_Ceacam" ~ "Module: PSG & CEACAM"))
+
+## Reordering
+dfs$species <- factor(x = dfs$species, levels = c("Human", "Marmoset", "Rabbit", "Guinea Pig", "Rat", "Mouse"))
+dfs$module_names <- factor(x = dfs$module_names, levels = c("Amino acid transport",
+                                                            "Carbohydrate transport",
+                                                            "Lipid transport",
+                                                            "Steroid hormone biosynthetic process",
+                                                            "Hormone secretion",
+                                                            "Hormone activity",
+                                                            "Module: PSG & CEACAM",
+                                                            "Regulation of immune system process",
+                                                            "Blood vessel morphogenesis"))
+dfs$cell.type.for.modules <- factor(x = dfs$cell.type.for.modules, levels = rev(c("STB",
+                                                                  "SynTI",
+                                                                  "SynTII",
+                                                                  "precPTGC",
+                                                                  "STGC",
+                                                                  "SpT",
+                                                                  "CTB",
+                                                                  "TrophProg",
+                                                                  "LaTP",
+                                                                   "JZTP",
+                                                                  "EVT",
+                                                                  "GlyT",
+                                                                  "InvTroph",
+                                                                  "SpATGC")))
+
+
+p1 <- ggplot(dfs, aes(x = module_names,
+           y = cell.type.for.modules,
+           fill = z_score)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  facet_wrap(~species,
+             ncol = 3,
+             scales = "free_y") +
+  scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "white",
+    high = "#B2182B",
+    midpoint = 0,
+    name = "Average module score (scaled)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 70,
+                               hjust = 1,
+                               vjust = 1),
+        axis.text = element_text(size = 14),
+    strip.background = element_blank(),
+    panel.spacing.y = unit(1, "cm"),
+    strip.text = element_text(face = "bold", size = 13),
+    legend.position = "bottom",
+    legend.margin = margin(t = 45),
+    legend.title.position = "top",
+    legend.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.key.size = unit(1, "cm"),
+    plot.margin = margin(t = 20, r = 5, b = 5, l = 5)) +
+  labs(x = NULL, y = NULL)
+ggsave(filename = "Visuals/r106/6species_MeanScores_PrecursorsMerged_nbin24_nctrl100.png", plot = p1, width = 14, height = 10)
+ggsave(filename = "Visuals/r106/6species_MeanScores_PrecursorsMerged_nbin24_nctrl100.pdf", plot = p1, width = 14, height = 10)
+
+## Emptying the environment
+rm(list = ls())
+```
+## Concluding the session
+```{r}
+sessionInfo()
+```
+
