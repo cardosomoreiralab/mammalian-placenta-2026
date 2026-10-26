@@ -1,0 +1,101 @@
+---
+title: "Figure 4c: Fraction of positively selected genes (amongst markers)"
+author: "Marcin Falis"
+date: "July 31st, 2026"
+last_update: "October 25th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/Figure4/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+library(biomaRt)
+library(tibble)
+library(tidyr)
+```
+## Mouse: markers (strict)
+```{r}
+## Defining variables
+logFC_cut <- 1
+adjp_cut <- 0.001
+
+## Loading the PSG list
+all_genes <- read.table("~/Scratch_MF/MolecularEvolutionAnalysis_July2026/positively_selected_genes_contribution/PositivelySelectedGenes/Data/ReferenceFiles/Mouse_AllGenesTested_ReferenceTable_r105.txt")
+psl_list <- read.table("~/Scratch_MF/MolecularEvolutionAnalysis_July2026/positively_selected_genes_contribution/PositivelySelectedGenes/Data/ReferenceFiles/mouse_pos_sel_genes_list.tab", sep = "\t", header = F)
+psl_list <- psl_list %>% dplyr::rename(ensembl_peptide_id = V1)
+
+## Dropping genes that have NAs in the reference
+print(paste("Dropping", sum(is.na(all_genes$ensembl_gene_id)), "genes from the all genes list"))
+all_genes <- all_genes %>% dplyr::filter(is.na(ensembl_gene_id) == FALSE)
+
+## Joining the lists
+psl_list <- left_join(psl_list, all_genes) %>% pull(ensembl_gene_id)
+print(paste("Dropping", sum(is.na(psl_list)), "genes from the PSG list due to lack of an ID."))
+psl_list <- psl_list %>% na.omit() %>% unique()
+all_genes <- all_genes$ensembl_gene_id %>% unique()
+
+## Final numbers
+print(paste("Working with", length(psl_list), "PSGs and", length(all_genes), "background genes."))
+
+## Loading the pseudobulk and binarizing
+mouse_markers <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/MarkerLists/Complete/MouseCompleteAtlas_ByCellType_MinPct0.15_MinDiffPct0.15_MinLogFC0.5_PosOnly_13thAug2026.txt")
+mouse_markers$gene <- gsub(pattern = "-.*", replacement = '', x = mouse_markers$gene)
+mouse_markers <- mouse_markers %>% dplyr::filter(avg_log2FC > logFC_cut) %>% dplyr::filter(p_val_adj < adjp_cut) %>% group_by(cluster) %>% arrange(desc(avg_log2FC), .by_group = T)
+mouse_markers <- split(mouse_markers, f = mouse_markers$cluster)
+
+## Computing proportions (counting only expressed genes, then computing proportions)
+mouse_markers <- lapply(mouse_markers, FUN = function(x) x %>% dplyr::filter(gene %in% all_genes) %>% pull(gene) %>% unique())
+mouse_stats <- lapply(mouse_markers, FUN = function(x) sum(x %in% psl_list) / length(x))
+mouse_stats <- mouse_stats %>% as.data.frame() %>% t() %>% as.data.frame() %>% rename("FractionPSG" = "V1") %>% rownames_to_column("Cell_Type")
+mouse_stats <- mouse_stats %>% mutate(Class = case_when(Cell_Type %in% c("SpT", "STGC", "SynTI", "SynTII") ~ "Novel trophoblast",
+                                                Cell_Type %in% c("precSTGC", "precSynTI") ~ "Novel trophoblast precursors", 
+                                                .default = "Other"))
+## Plotting
+p1 <- ggplot(data = mouse_stats, aes(x = reorder(Cell_Type, desc(FractionPSG)), y = FractionPSG, fill = Class)) + 
+  geom_point(size = 10, shape = 21, colour = "black", stroke = 1) + 
+   theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        text = element_text(colour = "black"),
+        axis.text.y = element_text(size = 20, colour = "black"), 
+        axis.text.x = element_text(size = 20, angle = 37.5, hjust = 1, colour = "black"), 
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 20, face = "bold"),
+        legend.title = element_blank(),
+        legend.position = "none",
+        legend.text = element_text(size = 20)) + 
+  ylab("Fraction of PSG") + 
+  scale_fill_manual(values = c("Novel trophoblast" = "#006400", "Novel trophoblast precursors" = "#7FBF7B", "Other" = "#E3D3B3")) + 
+  ylab("Fraction of positively selected markers")
+p1
+
+## Saving
+ggsave(filename = paste0("Visuals/4c_Mouse_PSGFraction_Markers_logFCcut", logFC_cut, "_adjp", adjp_cut, ".png"), plot = p1, width = 12, height = 10)
+ggsave(filename = paste0("Visuals/4c_Mouse_PSGFraction_Markers_logFCcut", logFC_cut, "_adjp", adjp_cut, ".pdf"), plot = p1, width = 12, height = 10)
+
+## Empty
+rm(list = ls())
+```
+## Concluding the session
+```{r}
+sessionInfo()
+```
+
+
