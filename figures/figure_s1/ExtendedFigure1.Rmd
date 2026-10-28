@@ -1,0 +1,134 @@
+---
+title: "Extended Figure 1b-f: Plotting"
+author: "Marcin Falis"
+date: "May 13th, 2026"
+last_update: "October 28th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/ExtendedFigure1/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+library(tidyr)
+library(tibble)
+library(biomaRt)
+library(topGO)
+library(fgsea)
+library(org.Mm.eg.db)
+library(org.Hs.eg.db)
+library(scales)
+library(ggrepel)
+library(edgeR)
+library(factoextra)
+library(ggdendro)
+```
+## Loading the data
+```{r}
+meta <- read.table("../ReferenceFiles/Atlases/Complete/CombinedMetadata_CompleteAtlases_FinalVersion_26thMay2026.txt")
+
+## Correct species GuineaPig to Guinea Pig
+meta$species[meta$species == "GuineaPig"] <- "Guinea Pig"
+
+## Fixing the order of species
+meta$species <- factor(x = meta$species, levels = c("Mouse", "Rat", "Guinea Pig", "Rabbit", "Human", "Marmoset"))
+```
+## QC plot 1d: percentage mitochondrial reads
+```{r}
+p <- ggplot(meta, aes(x = orig.ident, y = percent.mt, fill = species)) + geom_violin() + ylab("% mitochondrial reads") + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"), axis.title.y =  element_text(size = 14, face = "bold"), axis.title.x = element_blank(), axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, color = "black"), axis.text = element_text(size =  12), legend.position = "none", strip.background = element_rect(color="white", fill="white", size=1.5, linetype="solid"), strip.text.x = element_text(size = 14, color = "black", face = "bold"), panel.spacing = unit(1.5, "lines")) + facet_wrap(~species, scales = "free_x", nrow = 1)
+p1 <- p + stat_summary(fun.y=mean, geom="point", size=2)
+ggsave(filename = "Visuals/1d_CompleteAtlases_PercentMito.png", plot = p1, width = 20, height = 4)
+ggsave(filename = "Visuals/1d_CompleteAtlases_PercentMito.pdf", plot = p1, width = 20, height = 4)
+
+rm(list = setdiff(ls(), "meta"))
+```
+## QC plot 1e: percentage rRNA reads
+```{r}
+p <- ggplot(meta, aes(x = orig.ident, y = percent.rr, fill = species)) + geom_violin() + ylab("% rRNA reads") + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"), axis.title.y =  element_text(size = 14, face = "bold"), axis.title.x = element_blank(), axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), axis.text = element_text(size =  12, color = "black"), legend.position = "none", strip.background = element_rect(color="white", fill="white", size=1.5, linetype="solid"), strip.text.x = element_text(size = 14, color = "black", face = "bold"), panel.spacing = unit(1.5, "lines")) + facet_wrap(~species, scales = "free_x", nrow = 1)
+p1 <- p + stat_summary(fun.y=mean, geom="point", size=2)
+ggsave(filename = "Visuals/1e_CompleteAtlases_PercentRibo.png", plot = p1, width = 20, height = 4)
+ggsave(filename = "Visuals/1eCompleteAtlases_PercentRibo.pdf", plot = p1, width = 20, height = 4)
+
+rm(list = setdiff(ls(), "meta"))
+```
+## QC plot 3: nCounts
+```{r}
+p <- ggplot(meta, aes(x = orig.ident, y = nCount_RNA, fill = species)) + geom_violin() + ylab("Number of UMI") + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"), axis.title.y =  element_text(size = 14, face = "bold"), axis.title.x = element_blank(), axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), axis.text = element_text(size =  12, color = "black"), legend.position = "none", strip.background = element_rect(color="white", fill="white", size=1.5, linetype="solid"), strip.text.x = element_text(size = 14, color = "black", face = "bold"), panel.spacing = unit(1.5, "lines")) + facet_wrap(~species, scales = "free_x", nrow = 1)
+p1 <- p + stat_summary(fun.y=mean, geom="point", size=2)
+ggsave(filename = "Visuals/1b_CompleteAtlases_nCount.png", plot = p1, width = 20, height = 4)
+ggsave(filename = "Visuals/1b_CompleteAtlases_nCount.pdf", plot = p1, width = 20, height = 4)
+
+rm(list = setdiff(ls(), "meta"))
+```
+## QC plot 4: nFeature
+```{r}
+p <- ggplot(meta, aes(x = orig.ident, y = nFeature_RNA, fill = species)) + geom_violin() + ylab("Number of genes") + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"), axis.title.y =  element_text(size = 14, face = "bold"), axis.title.x = element_blank(), axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), axis.text = element_text(size =  10), legend.position = "none", strip.background = element_rect(color="white", fill="white", size=1.5, linetype="solid"), strip.text.x = element_text(size = 14, color = "black", face = "bold", family = "arial"), panel.spacing = unit(1.5, "lines")) + facet_wrap(~species, scales = "free_x", nrow = 1)
+p1 <- p + stat_summary(fun.y=mean, geom="point", size=2)
+ggsave(filename = "Visuals/1c_CompleteAtlases_nFeature.png", plot = p1, width = 20, height = 4)
+ggsave(filename = "Visuals/1c_CompleteAtlases_nFeature.png", plot = p1, width = 20, height = 4)
+
+rm(list = ls())
+```
+## Plotting proportions of cell classes per cell type
+## Cell class proportions per species
+```{r}
+## Reloading the metadata
+meta <- read.table("../ReferenceFiles/Atlases/Complete/CombinedMetadata_CompleteAtlases_FinalVersion_26thMay2026.txt")
+
+## Computing proportions
+mouse_df <- meta %>% dplyr::filter(species == "Mouse") %>% dplyr::select(cell.class) %>% mutate(cell.class.final = case_when(cell.class == "OtherBloodCells" ~ "Other blood cells", cell.class %in% c("DecidualCells") ~ "Decidual cells", cell.class == "YolkSac" ~ "Yolk sac", cell.class == "StromalCells" ~ "Stromal", .default = cell.class)) %>% pull(cell.class.final) %>% table() %>% as.data.frame() %>% dplyr::rename("Cell_class" = ".") %>% mutate("Frequency" = Freq / nrow(meta %>% dplyr::filter(species == "Mouse"))) %>% dplyr::select(-Freq) %>% dplyr::mutate("Species" = "Mouse")
+
+rat_df <- meta %>% dplyr::filter(species == "Rat") %>% dplyr::select(cell.class) %>% mutate(cell.class.final = case_when(cell.class == "OtherBloodCells" ~ "Other blood cells", cell.class %in% c("DecidualCells") ~ "Decidual cells", cell.class == "YolkSac" ~ "Yolk sac", cell.class == "StromalCells" ~ "Stromal", .default = cell.class)) %>% pull(cell.class.final) %>% table() %>% as.data.frame() %>% dplyr::rename("Cell_class" = ".") %>% mutate("Frequency" = Freq / nrow(meta %>% dplyr::filter(species == "Rat"))) %>% dplyr::select(-Freq) %>% dplyr::mutate("Species" = "Rat")
+
+human_df <- meta %>% dplyr::filter(species == "Human") %>% dplyr::select(cell.class) %>% mutate(cell.class.final = case_when(cell.class == "OtherBloodCells" ~ "Other blood cells", cell.class %in% c("DecidualCells") ~ "Decidual cells", cell.class == "YolkSac" ~ "Yolk Sac", cell.class == "StromalCells" ~ "Stromal", .default = cell.class)) %>% pull(cell.class.final) %>% table() %>% as.data.frame() %>% dplyr::rename("Cell_class" = ".") %>% mutate("Frequency" = Freq / nrow(meta %>% dplyr::filter(species == "Human"))) %>% dplyr::select(-Freq) %>% dplyr::mutate("Species" = "Human")
+
+marmoset_df <- meta %>% dplyr::filter(species == "Marmoset") %>% dplyr::select(cell.class) %>% mutate(cell.class.final = case_when(cell.class == "OtherBloodCells" ~ "Other blood cells", cell.class %in% c("DecidualCells") ~ "Decidual cells", cell.class == "YolkSac" ~ "Yolk sac", cell.class == "StromalCells" ~ "Stromal", .default = cell.class)) %>% pull(cell.class.final) %>% table() %>% as.data.frame() %>% dplyr::rename("Cell_class" = ".") %>% mutate("Frequency" = Freq / nrow(meta %>% dplyr::filter(species == "Marmoset"))) %>% dplyr::select(-Freq) %>% dplyr::mutate("Species" = "Marmoset")
+
+rabbit_df <- meta %>% dplyr::filter(species == "Rabbit") %>% dplyr::select(cell.class) %>% mutate(cell.class.final = case_when(cell.class == "OtherBloodCells" ~ "Other blood cells", cell.class %in% c("DecidualCells") ~ "Decidual cells", cell.class == "YolkSac" ~ "Yolk sac", cell.class == "StromalCells" ~ "Stromal", .default = cell.class)) %>% pull(cell.class.final) %>% table() %>% as.data.frame() %>% dplyr::rename("Cell_class" = ".") %>% mutate("Frequency" = Freq / nrow(meta %>% dplyr::filter(species == "Rabbit"))) %>% dplyr::select(-Freq) %>% dplyr::mutate("Species" = "Rabbit")
+
+guineapig_df <- meta %>% dplyr::filter(species == "GuineaPig") %>% dplyr::select(cell.class) %>% mutate(cell.class.final = case_when(cell.class == "OtherBloodCells" ~ "Other blood cells", cell.class %in% c("DecidualCells") ~ "Decidual cells", cell.class == "YolkSac" ~ "Yolk sac", cell.class == "StromalCells" ~ "Stromal", .default = cell.class)) %>% pull(cell.class.final) %>% table() %>% as.data.frame() %>% dplyr::rename("Cell_class" = ".") %>% mutate("Frequency" = Freq / nrow(meta %>% dplyr::filter(species == "GuineaPig"))) %>% dplyr::select(-Freq) %>% dplyr::mutate("Species" = "Guinea Pig")
+
+## Compiling altogether
+df <- rbind(mouse_df, rat_df, rabbit_df, marmoset_df, human_df, guineapig_df)
+
+df$Species <- factor(df$Species, levels = c("Mouse", "Rat", "Guinea Pig", "Rabbit", "Marmoset", "Human"))
+
+## Defining color palette
+palette <- c("Leukocytes" = "#1F78B4",
+             "Other blood cells" = "#6A3D9A",
+             "Decidual cells" = "#E6AB02",
+             "Endothelial" = "#C71585",
+              "Stromal" = "#A6761D",
+             "Yolk sac" = "#969696",
+             "Trophoblast" = "#00BFC4")
+
+## Plotting proportions
+p1 <- ggplot(df, aes(x = Species, y = Frequency, fill = Cell_class)) + geom_bar(stat = "identity") + ylab("Fraction of the atlas") + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"), plot.title = element_blank(), axis.title = element_text(size = 15, face = "bold", colour = "black"), axis.text.x = element_text(angle = 37.5, vjust = 1, hjust = 1, size = 14, colour = "black"), axis.text = element_text(size =  14, colour = "black"), legend.position = "bottom", legend.text = element_text(size = 14), axis.title.x = element_blank()) + scale_fill_manual(values = palette) + labs(fill = NULL)
+
+# Save figure
+ggsave("Visuals/1f_CompleteAtlases_CellClassProportions.png", plot = p1, width = 7, height = 6, dpi = 300)
+ggsave("Visuals/1f_CompleteAtlases_CellClassProportions.pdf", plot = p1, width = 10, height = 9)
+```
+## Concluding the session
+```{r}
+sessionInfo()
+```
+
+
