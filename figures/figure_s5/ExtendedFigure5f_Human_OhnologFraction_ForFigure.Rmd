@@ -1,0 +1,99 @@
+---
+title: "Extended Figure 5f: Plotting Fraction of Ohnologs"
+author: "Marcin Falis"
+date: "August 6th, 2026"
+last_update: "October 29th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/ExtendedFigure5/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+library(biomaRt)
+library(tibble)
+library(tidyr)
+library(ggdendro)
+library(factoextra)
+library(forcats)
+library(FSA)
+library(ggsignif)
+```
+## Obtaining a list of protein coding genes only (this is because the list of ohnologs only has examples of protein coding genes)
+```{r}
+pcg_list <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/GeneLists/PCGs/Human_hg38_PCG.rds")
+```
+# FROM MARKERS
+## Ohnolog fraction: Human
+### Using OHNOLOG-V2.0 list
+```{r}
+## Defining variables
+logFC_cut <- 1
+adjp_cut <- 0.001
+
+## Loading the ohnologs list
+ohnolog_list <- read.table("~/Scratch_MF/MolecularEvolutionAnalysis_July2026/ohnolog_contribution/Data/ohnologs-v2.0_database/hsapiens.Pairs.Strict.2R (2).txt", sep = "\t", header = T)
+ohnolog_list <- ohnolog_list %>% dplyr::select(Ohno1, Ohno2) %>% pull() %>% unique()
+
+## Loading the markers and filtering
+mouse_markers <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/MarkerLists/Complete/HumanCompleteAtlas_ByCellType_MinPct0.15_MinDiffPct0.15_MinLogFC0.5_PosOnly_14thAug2026.txt")
+mouse_markers$gene <- gsub(pattern = "-.*", replacement = '', x = mouse_markers$gene)
+mouse_markers <- mouse_markers %>% dplyr::filter(gene %in% pcg_list) %>% dplyr::filter(avg_log2FC > logFC_cut) %>% dplyr::filter(p_val_adj < adjp_cut) %>% group_by(cluster) %>% arrange(desc(avg_log2FC), .by_group = T)
+mouse_markers <- split(mouse_markers, f = mouse_markers$cluster)
+
+## Computing proportions (counting only expressed genes, then computing proportions)
+mouse_genes <- lapply(mouse_markers, FUN = function(x) x %>% pull(gene) %>% unique())
+mouse_stats <- lapply(mouse_genes, FUN = function(x) sum(x %in% ohnolog_list) / length(x))
+mouse_stats <- mouse_stats %>% as.data.frame() %>% t() %>% as.data.frame() %>% rename("FractionOhnologs" = "V1") %>% rownames_to_column("Cell_Type")
+mouse_stats <- mouse_stats %>%
+    dplyr::mutate(Class = case_when(Cell_Type %in% c("STB") ~ "Syncytiotrophoblast",
+                                                Cell_Type %in% c("fCTB", "cCTB", "CTB", "EVT") ~ "Other trophoblasts", 
+                                                .default = "Non-trophoblast"))
+mouse_stats$Class <- factor(mouse_stats$Class , levels = c("Syncytiotrophoblast", "Other trophoblasts", "Non-trophoblast"))
+
+## Plotting
+p1 <- ggplot(data = mouse_stats, aes(x = reorder(Cell_Type, desc(FractionOhnologs)), y = FractionOhnologs, fill = Class)) + 
+  geom_point(size = 10, shape = 21, colour = "black", stroke = 1) + 
+   theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        text = element_text(colour = "black"),
+        axis.text.y = element_text(size = 20, colour = "black"), 
+        axis.text.x = element_text(size = 20, angle = 37.5, hjust = 1, colour = "black"), 
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 20, face = "bold"),
+        legend.title = element_blank(),
+        legend.position = "bottom",
+        legend.text = element_text(size = 20)) + 
+  ylab("Fraction of ohnolog markers") +
+  scale_fill_manual(values = c("Syncytiotrophoblast" = "#006400", "Other trophoblasts" = "#7FBF7B", "Non-trophoblast" = "#E3D3B3"))
+p1
+
+## Saving
+ggsave(filename = paste0("Visuals/f_Human_OhnologFractionStrict_Markers_logFCcut", logFC_cut, "_adjp", adjp_cut, ".png"), plot = p1, width = 12, height = 10)
+ggsave(filename = paste0("Visuals/f_Human_OhnologFractionStrict_Markers_logFCcut", logFC_cut, "_adjp", adjp_cut, ".pdf"), plot = p1, width = 12, height = 10)
+
+## Empty
+#rm(list = ls())
+```
+## Concluding the session
+```{r}
+sessionInfo()
+```
+

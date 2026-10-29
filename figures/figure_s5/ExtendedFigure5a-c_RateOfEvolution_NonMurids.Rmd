@@ -1,0 +1,451 @@
+---
+title: "Extended Figure 5a: Transcriptome divergence/rate of evolution (Extended Figure 5a)"
+author: "Marcin Falis"
+date: "August 15th, 2026"
+last_update: "October 29th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/ExtendedFigure5/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+library(biomaRt)
+library(tibble)
+library(tidyr)
+library(ggdendro)
+library(factoextra)
+library(forcats)
+library(ggpubr)
+library(FSA)
+library(ggsignif)
+library(tidytext)
+```
+## Extended Figure 5a: Plotting rate of gene expression evolution from pseudobulks (with random resampling), expression cutoff = 0.5, human vs marmoset
+```{r}
+expr_cutoff <- 0.5
+ref_pseud_path <- "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/HumanCompleteAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt"
+que_pseud_path <- "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/MarmosetCompleteAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt"
+ortholog_table <- "~/Scratch_MF/DownstreamAnalysis_2.7.11a/ReferenceFiles/Homology_1to1/HumanMarmoset_Homology_1to1_r105.txt"
+ref_sp <- "Human"
+que_sp <- "Marmoset"
+ref_cl_excl <- NULL
+que_cl_excl <- NULL
+permutation_N <- 1000
+cor.method <- "spearman"
+
+## Loading pseudobulk 1, retaining only ensembl IDs, adding the species identifier, excluding genes with 0 counts
+ref_pseudobulk <- read.table(file = ref_pseud_path)
+ref_pseudobulk[ref_pseudobulk < expr_cutoff] <- 0
+ref_pseudobulk <- ref_pseudobulk[,!(colnames(ref_pseudobulk) %in% ref_cl_excl)]
+rownames(ref_pseudobulk) <- gsub(pattern = "-.*", replacement = '', x = rownames(ref_pseudobulk))
+colnames(ref_pseudobulk) <- paste0(colnames(ref_pseudobulk), paste0("_", ref_sp))
+to_remove <- rownames(ref_pseudobulk[rowSums(ref_pseudobulk) == 0,])
+ref_pseudobulk <- ref_pseudobulk[!(rownames(ref_pseudobulk) %in% to_remove),]
+
+## Loading pseudobulk 2, retaining only ensembl IDs, adding the species identifier, excluding genes with 0 counts
+que_pseudobulk <- read.table(file = que_pseud_path)
+que_pseudobulk[que_pseudobulk < expr_cutoff] <- 0
+que_pseudobulk <- que_pseudobulk[,!(colnames(que_pseudobulk) %in% que_cl_excl)]
+rownames(que_pseudobulk) <- gsub(pattern = "-.*", replacement = '', x = rownames(que_pseudobulk))
+colnames(que_pseudobulk) <- paste0(colnames(que_pseudobulk), paste0("_", que_sp))
+to_remove <- rownames(que_pseudobulk[rowSums(que_pseudobulk) == 0,])
+que_pseudobulk <- que_pseudobulk[!(rownames(que_pseudobulk) %in% to_remove),]
+
+## Loading the orthology reference table
+one_to_one_list <- read.table(ortholog_table)
+colnames(one_to_one_list) <- c("Reference.ensembl.ID", "Query.ensembl.ID", "Query.homology.type")
+
+## Filtering out genes which are labeled as one_to_one but have more matches (ENSEMBL mistake)
+index <- duplicated(one_to_one_list$Reference.ensembl.ID)
+one_to_one_list <- one_to_one_list[!(index),]
+
+## Retaining one-to-one orthologs only
+ref_pseudobulk <- ref_pseudobulk %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Reference.ensembl.ID)
+que_pseudobulk <- que_pseudobulk %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Query.ensembl.ID)
+
+### Replace the query names with reference equivalents
+que_pseudobulk <- left_join(que_pseudobulk, (one_to_one_list %>% dplyr::select(Reference.ensembl.ID, Query.ensembl.ID)), by = c("rowname" = "Query.ensembl.ID")) %>% dplyr::select(Reference.ensembl.ID, everything(), -rowname)
+
+### Obtaining genes that are common to both species
+genes_to_use <- intersect(ref_pseudobulk$rowname, que_pseudobulk$Reference.ensembl.ID)
+
+## Filtering and reordering the genes in each pseudobulk
+ref_pseudobulk <- ref_pseudobulk %>% dplyr::filter(rowname %in% genes_to_use) %>% column_to_rownames(var = "rowname")
+que_pseudobulk <- que_pseudobulk %>% dplyr::filter(Reference.ensembl.ID %in% genes_to_use) %>% column_to_rownames("Reference.ensembl.ID")
+que_pseudobulk <- que_pseudobulk[rownames(ref_pseudobulk),]
+ref_pseudobulk <- ref_pseudobulk %>% rownames_to_column()
+que_pseudobulk <- que_pseudobulk %>% rownames_to_column()
+
+## Sanity check
+test <- identical(rownames(ref_pseudobulk), rownames(que_pseudobulk))
+if (test == TRUE) {
+  print("Sanity check passed. Proceeding to plotting.")
+} else {
+  print("Sanity check failed. The pseudobulks do not contain the same genes/have a different order of genes. Exiting.")
+  break()
+}
+
+## Merging and retaining the final pseudobulk
+pseud_final <- left_join(ref_pseudobulk, que_pseudobulk) %>% column_to_rownames("rowname")
+pseud_final <- pseud_final[,order(colnames(pseud_final))]
+rm(que_pseudobulk, ref_pseudobulk)
+
+## Final pseudobulk
+pseud_final
+
+## Loop over to compute correlations and extract relevant values
+genes <- rownames(pseud_final)
+
+df <- Reduce(rbind, lapply(1:permutation_N, function(sd){
+  
+    set.seed(sd)
+
+    boot_genes <- sample(
+      genes,
+      size = length(genes),
+      replace = TRUE
+    )
+
+    mat.boot <- pseud_final[boot_genes,]
+
+    corr <- cor(mat.boot, method = cor.method)
+    corr <- corr %>% as.data.frame() %>% 
+  rownames_to_column("rowname") %>% 
+  pivot_longer(-rowname, names_to = "colnames", values_to = "correlation") %>%
+  mutate(seed = sd)
+    return(corr)
+  }))
+
+## Getting data to plot
+to_plot <- df %>% mutate(rowname_cell_type = gsub(pattern = "_.*", replacement = "", x = rowname),
+              colname_cell_type = gsub(pattern = "_.*", replacement = "", x = colnames),
+              rowname_species = gsub(pattern = ".*_", replacement = "", x = rowname),
+              colname_species = gsub(pattern = ".*_", replacement = "", x = colnames)) %>%
+  dplyr::mutate(colname_cell_type = case_when(colname_cell_type == "TrophProg" ~ "CTB", colname_cell_type == "InvTroph" ~ "EVT", .default = colname_cell_type)) %>%
+  dplyr::select(rowname_species, rowname_cell_type, colname_species, colname_cell_type, correlation, seed) %>%
+  dplyr::filter(rowname_cell_type == colname_cell_type & rowname_species != colname_species) %>%
+  dplyr::select(rowname_cell_type, correlation, seed) %>%
+  unique()
+
+## Converting to rate of evolution
+to_plot$correlation <- 1 - to_plot$correlation
+
+## Rearraning factors and adding labels to highlight trophoblasts
+to_plot <- to_plot %>%
+  dplyr::mutate(rowname_cell_type = fct_reorder(rowname_cell_type, correlation, .fun = median, .desc = TRUE)) %>%
+  dplyr::mutate(Class = case_when(rowname_cell_type %in% c("STB") ~ "Syncytiotrophoblast",
+                                                rowname_cell_type %in% c("fCTB", "cCTB", "CTB", "EVT") ~ "Other trophoblasts", 
+                                                .default = "Non-trophoblast"))
+to_plot$Class <- factor(to_plot$Class, levels = c("Syncytiotrophoblast", "Other trophoblasts", "Non-trophoblast"))
+
+p1 <- ggplot(data = to_plot, aes(x = rowname_cell_type, y = correlation, fill = Class)) + 
+  geom_boxplot() + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        axis.text.y = element_text(size = 20, colour = "black"),
+        axis.text.x = element_text(size = 20, angle = 37.5, hjust = 1, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 22, face = "bold"),
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 22), 
+        legend.position = "none") +
+  ylab("Divergence (1 - Spearman's rho)") +
+  scale_fill_manual(values = c("Syncytiotrophoblast" = "#006400", "Other trophoblasts" = "#7FBF7B", "Non-trophoblast" = "#E3D3B3"))
+ggsave(filename = paste0("Visuals/a_", ref_sp, que_sp, "_RateOfEvolution_SpearmanRho_WithReplacement_nperm", permutation_N, "_cut", expr_cutoff, ".png"), plot = p1, width = 12, height = 10)
+ggsave(filename = paste0("Visuals/a_", ref_sp, que_sp, "_RateOfEvolution_SpearmanRho_WithReplacement_nperm", permutation_N, "_cut", expr_cutoff, ".pdf"), plot = p1, width = 12, height = 10)
+
+## Concluding the session
+rm(list = ls())
+```
+## Extended Figure 5b: Plotting rate of gene expression evolution from pseudobulks (with random resampling), expression cutoff = 0.5, human vs rabbit
+```{r}
+expr_cutoff <- 0.5
+ref_pseud_path <- "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/HumanCompleteAtlas_AveragePseudobulk_ByCellType_EndoCombined_15thAug2026.txt"
+que_pseud_path <- "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/RabbitCompleteAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt"
+ortholog_table <- "~/Scratch_MF/DownstreamAnalysis_2.7.11a/ReferenceFiles/Homology_1to1/HumanRabbit_Homology_1to1_r105.txt"
+ref_sp <- "Human"
+que_sp <- "Rabbit"
+ref_cl_excl <- NULL
+que_cl_excl <- NULL
+permutation_N <- 1000
+cor.method <- "spearman"
+
+## Loading pseudobulk 1, retaining only ensembl IDs, adding the species identifier, excluding genes with 0 counts
+ref_pseudobulk <- read.table(file = ref_pseud_path)
+ref_pseudobulk[ref_pseudobulk < expr_cutoff] <- 0
+ref_pseudobulk <- ref_pseudobulk[,!(colnames(ref_pseudobulk) %in% ref_cl_excl)]
+rownames(ref_pseudobulk) <- gsub(pattern = "-.*", replacement = '', x = rownames(ref_pseudobulk))
+colnames(ref_pseudobulk) <- paste0(colnames(ref_pseudobulk), paste0("_", ref_sp))
+to_remove <- rownames(ref_pseudobulk[rowSums(ref_pseudobulk) == 0,])
+ref_pseudobulk <- ref_pseudobulk[!(rownames(ref_pseudobulk) %in% to_remove),]
+
+## Loading pseudobulk 2, retaining only ensembl IDs, adding the species identifier, excluding genes with 0 counts
+que_pseudobulk <- read.table(file = que_pseud_path)
+que_pseudobulk[que_pseudobulk < expr_cutoff] <- 0
+que_pseudobulk <- que_pseudobulk[,!(colnames(que_pseudobulk) %in% que_cl_excl)]
+rownames(que_pseudobulk) <- gsub(pattern = "-.*", replacement = '', x = rownames(que_pseudobulk))
+colnames(que_pseudobulk) <- paste0(colnames(que_pseudobulk), paste0("_", que_sp))
+to_remove <- rownames(que_pseudobulk[rowSums(que_pseudobulk) == 0,])
+que_pseudobulk <- que_pseudobulk[!(rownames(que_pseudobulk) %in% to_remove),]
+
+## Loading the orthology reference table
+one_to_one_list <- read.table(ortholog_table)
+colnames(one_to_one_list) <- c("Reference.ensembl.ID", "Query.ensembl.ID", "Query.homology.type")
+
+## Filtering out genes which are labeled as one_to_one but have more matches (ENSEMBL mistake)
+index <- duplicated(one_to_one_list$Reference.ensembl.ID)
+one_to_one_list <- one_to_one_list[!(index),]
+
+## Retaining one-to-one orthologs only
+ref_pseudobulk <- ref_pseudobulk %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Reference.ensembl.ID)
+que_pseudobulk <- que_pseudobulk %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Query.ensembl.ID)
+
+### Replace the query names with reference equivalents
+que_pseudobulk <- left_join(que_pseudobulk, (one_to_one_list %>% dplyr::select(Reference.ensembl.ID, Query.ensembl.ID)), by = c("rowname" = "Query.ensembl.ID")) %>% dplyr::select(Reference.ensembl.ID, everything(), -rowname)
+
+### Obtaining genes that are common to both species
+genes_to_use <- intersect(ref_pseudobulk$rowname, que_pseudobulk$Reference.ensembl.ID)
+
+## Filtering and reordering the genes in each pseudobulk
+ref_pseudobulk <- ref_pseudobulk %>% dplyr::filter(rowname %in% genes_to_use) %>% column_to_rownames(var = "rowname")
+que_pseudobulk <- que_pseudobulk %>% dplyr::filter(Reference.ensembl.ID %in% genes_to_use) %>% column_to_rownames("Reference.ensembl.ID")
+que_pseudobulk <- que_pseudobulk[rownames(ref_pseudobulk),]
+ref_pseudobulk <- ref_pseudobulk %>% rownames_to_column()
+que_pseudobulk <- que_pseudobulk %>% rownames_to_column()
+
+## Sanity check
+test <- identical(rownames(ref_pseudobulk), rownames(que_pseudobulk))
+if (test == TRUE) {
+  print("Sanity check passed. Proceeding to plotting.")
+} else {
+  print("Sanity check failed. The pseudobulks do not contain the same genes/have a different order of genes. Exiting.")
+  break()
+}
+
+## Merging and retaining the final pseudobulk
+pseud_final <- left_join(ref_pseudobulk, que_pseudobulk) %>% column_to_rownames("rowname")
+pseud_final <- pseud_final[,order(colnames(pseud_final))]
+rm(que_pseudobulk, ref_pseudobulk)
+
+## Final pseudobulk
+pseud_final
+
+## Loop over to compute correlations and extract relevant values
+genes <- rownames(pseud_final)
+
+df <- Reduce(rbind, lapply(1:permutation_N, function(sd){
+  
+    set.seed(sd)
+
+    boot_genes <- sample(
+      genes,
+      size = length(genes),
+      replace = TRUE
+    )
+
+    mat.boot <- pseud_final[boot_genes,]
+
+    corr <- cor(mat.boot, method = cor.method)
+    corr <- corr %>% as.data.frame() %>% 
+  rownames_to_column("rowname") %>% 
+  pivot_longer(-rowname, names_to = "colnames", values_to = "correlation") %>%
+  mutate(seed = sd)
+    return(corr)
+  }))
+
+## Getting data to plot
+to_plot <- df %>% mutate(rowname_cell_type = gsub(pattern = "_.*", replacement = "", x = rowname),
+              colname_cell_type = gsub(pattern = "_.*", replacement = "", x = colnames),
+              rowname_species = gsub(pattern = ".*_", replacement = "", x = rowname),
+              colname_species = gsub(pattern = ".*_", replacement = "", x = colnames)) %>%
+  dplyr::mutate(colname_cell_type = case_when(colname_cell_type == "TrophProg" ~ "CTB", colname_cell_type == "InvTroph" ~ "EVT", .default = colname_cell_type)) %>%
+  dplyr::select(rowname_species, rowname_cell_type, colname_species, colname_cell_type, correlation, seed) %>%
+  dplyr::filter(rowname_cell_type == colname_cell_type & rowname_species != colname_species) %>%
+  dplyr::select(rowname_cell_type, correlation, seed) %>%
+  unique()
+
+## Converting to rate of evolution
+to_plot$correlation <- 1 - to_plot$correlation
+
+## Rearraning factors and adding labels to highlight trophoblasts
+to_plot <- to_plot %>%
+  dplyr::mutate(rowname_cell_type = fct_reorder(rowname_cell_type, correlation, .fun = median, .desc = TRUE)) %>%
+  dplyr::mutate(Class = case_when(rowname_cell_type %in% c("STB") ~ "Syncytiotrophoblast",
+                                                rowname_cell_type %in% c("fCTB", "cCTB", "CTB", "EVT") ~ "Other trophoblasts", 
+                                                .default = "Non-trophoblast"))
+to_plot$Class <- factor(to_plot$Class, levels = c("Syncytiotrophoblast", "Other trophoblasts", "Non-trophoblast"))
+
+p1 <- ggplot(data = to_plot, aes(x = rowname_cell_type, y = correlation, fill = Class)) + 
+  geom_boxplot() + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        axis.text.y = element_text(size = 20, colour = "black"),
+        axis.text.x = element_text(size = 20, angle = 37.5, hjust = 1, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 22, face = "bold"),
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 22), 
+        legend.position = "none") +
+  ylab("Divergence (1 - Spearman's rho)") +
+  scale_fill_manual(values = c("Syncytiotrophoblast" = "#006400", "Other trophoblasts" = "#7FBF7B", "Non-trophoblast" = "#E3D3B3"))
+ggsave(filename = paste0("Visuals/b_", ref_sp, que_sp, "_RateOfEvolution_SpearmanRho_WithReplacement_nperm", permutation_N, "_cut", expr_cutoff, ".png"), plot = p1, width = 12, height = 10)
+ggsave(filename = paste0("Visuals/b_", ref_sp, que_sp, "_RateOfEvolution_SpearmanRho_WithReplacement_nperm", permutation_N, "_cut", expr_cutoff, ".pdf"), plot = p1, width = 12, height = 10)
+
+## Concluding the session
+rm(list = ls())
+```
+## Extended Figure 5c: Plotting rate of gene expression evolution from pseudobulks (with random resampling), expression cutoff = 0.5, human vs guinea pig
+```{r}
+expr_cutoff <- 0.5
+ref_pseud_path <- "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/HumanCompleteAtlas_AveragePseudobulk_ByCellType_EndoCombined_15thAug2026.txt"
+que_pseud_path <- "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/GuineaPigCompleteAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt"
+ortholog_table <- "~/Scratch_MF/DownstreamAnalysis_2.7.11a/ReferenceFiles/Homology_1to1/HumanGuineaPig_Homology_1to1_r104.txt"
+ref_sp <- "Human"
+que_sp <- "GuineaPig"
+ref_cl_excl <- NULL
+que_cl_excl <- NULL
+permutation_N <- 1000
+cor.method <- "spearman"
+
+## Loading pseudobulk 1, retaining only ensembl IDs, adding the species identifier, excluding genes with 0 counts
+ref_pseudobulk <- read.table(file = ref_pseud_path)
+ref_pseudobulk[ref_pseudobulk < expr_cutoff] <- 0
+ref_pseudobulk <- ref_pseudobulk[,!(colnames(ref_pseudobulk) %in% ref_cl_excl)]
+rownames(ref_pseudobulk) <- gsub(pattern = "-.*", replacement = '', x = rownames(ref_pseudobulk))
+colnames(ref_pseudobulk) <- paste0(colnames(ref_pseudobulk), paste0("_", ref_sp))
+to_remove <- rownames(ref_pseudobulk[rowSums(ref_pseudobulk) == 0,])
+ref_pseudobulk <- ref_pseudobulk[!(rownames(ref_pseudobulk) %in% to_remove),]
+
+## Loading pseudobulk 2, retaining only ensembl IDs, adding the species identifier, excluding genes with 0 counts
+que_pseudobulk <- read.table(file = que_pseud_path)
+que_pseudobulk[que_pseudobulk < expr_cutoff] <- 0
+que_pseudobulk <- que_pseudobulk[,!(colnames(que_pseudobulk) %in% que_cl_excl)]
+rownames(que_pseudobulk) <- gsub(pattern = "-.*", replacement = '', x = rownames(que_pseudobulk))
+colnames(que_pseudobulk) <- paste0(colnames(que_pseudobulk), paste0("_", que_sp))
+to_remove <- rownames(que_pseudobulk[rowSums(que_pseudobulk) == 0,])
+que_pseudobulk <- que_pseudobulk[!(rownames(que_pseudobulk) %in% to_remove),]
+
+## Loading the orthology reference table
+one_to_one_list <- read.table(ortholog_table)
+colnames(one_to_one_list) <- c("Reference.ensembl.ID", "Query.ensembl.ID", "Query.homology.type")
+
+## Filtering out genes which are labeled as one_to_one but have more matches (ENSEMBL mistake)
+index <- duplicated(one_to_one_list$Reference.ensembl.ID)
+one_to_one_list <- one_to_one_list[!(index),]
+
+## Retaining one-to-one orthologs only
+ref_pseudobulk <- ref_pseudobulk %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Reference.ensembl.ID)
+que_pseudobulk <- que_pseudobulk %>% rownames_to_column() %>% dplyr::filter(rowname %in% one_to_one_list$Query.ensembl.ID)
+
+### Replace the query names with reference equivalents
+que_pseudobulk <- left_join(que_pseudobulk, (one_to_one_list %>% dplyr::select(Reference.ensembl.ID, Query.ensembl.ID)), by = c("rowname" = "Query.ensembl.ID")) %>% dplyr::select(Reference.ensembl.ID, everything(), -rowname)
+
+### Obtaining genes that are common to both species
+genes_to_use <- intersect(ref_pseudobulk$rowname, que_pseudobulk$Reference.ensembl.ID)
+
+## Filtering and reordering the genes in each pseudobulk
+ref_pseudobulk <- ref_pseudobulk %>% dplyr::filter(rowname %in% genes_to_use) %>% column_to_rownames(var = "rowname")
+que_pseudobulk <- que_pseudobulk %>% dplyr::filter(Reference.ensembl.ID %in% genes_to_use) %>% column_to_rownames("Reference.ensembl.ID")
+que_pseudobulk <- que_pseudobulk[rownames(ref_pseudobulk),]
+ref_pseudobulk <- ref_pseudobulk %>% rownames_to_column()
+que_pseudobulk <- que_pseudobulk %>% rownames_to_column()
+
+## Sanity check
+test <- identical(rownames(ref_pseudobulk), rownames(que_pseudobulk))
+if (test == TRUE) {
+  print("Sanity check passed. Proceeding to plotting.")
+} else {
+  print("Sanity check failed. The pseudobulks do not contain the same genes/have a different order of genes. Exiting.")
+  break()
+}
+
+## Merging and retaining the final pseudobulk
+pseud_final <- left_join(ref_pseudobulk, que_pseudobulk) %>% column_to_rownames("rowname")
+pseud_final <- pseud_final[,order(colnames(pseud_final))]
+rm(que_pseudobulk, ref_pseudobulk)
+
+## Final pseudobulk
+pseud_final
+
+## Loop over to compute correlations and extract relevant values
+genes <- rownames(pseud_final)
+
+df <- Reduce(rbind, lapply(1:permutation_N, function(sd){
+  
+    set.seed(sd)
+
+    boot_genes <- sample(
+      genes,
+      size = length(genes),
+      replace = TRUE
+    )
+
+    mat.boot <- pseud_final[boot_genes,]
+
+    corr <- cor(mat.boot, method = cor.method)
+    corr <- corr %>% as.data.frame() %>% 
+  rownames_to_column("rowname") %>% 
+  pivot_longer(-rowname, names_to = "colnames", values_to = "correlation") %>%
+  mutate(seed = sd)
+    return(corr)
+  }))
+
+## Getting data to plot
+to_plot <- df %>% mutate(rowname_cell_type = gsub(pattern = "_.*", replacement = "", x = rowname),
+              colname_cell_type = gsub(pattern = "_.*", replacement = "", x = colnames),
+              rowname_species = gsub(pattern = ".*_", replacement = "", x = rowname),
+              colname_species = gsub(pattern = ".*_", replacement = "", x = colnames)) %>%
+  dplyr::mutate(colname_cell_type = case_when(colname_cell_type == "TrophProg" ~ "CTB", colname_cell_type == "InvTroph" ~ "EVT", .default = colname_cell_type)) %>%
+  dplyr::select(rowname_species, rowname_cell_type, colname_species, colname_cell_type, correlation, seed) %>%
+  dplyr::filter(rowname_cell_type == colname_cell_type & rowname_species != colname_species) %>%
+  dplyr::select(rowname_cell_type, correlation, seed) %>%
+  unique()
+
+## Converting to rate of evolution
+to_plot$correlation <- 1 - to_plot$correlation
+
+## Rearraning factors and adding labels to highlight trophoblasts
+to_plot <- to_plot %>%
+  dplyr::mutate(rowname_cell_type = fct_reorder(rowname_cell_type, correlation, .fun = median, .desc = TRUE)) %>%
+  dplyr::mutate(Class = case_when(rowname_cell_type %in% c("STB") ~ "Syncytiotrophoblast",
+                                                rowname_cell_type %in% c("fCTB", "cCTB", "CTB", "EVT") ~ "Other trophoblasts", 
+                                                .default = "Non-trophoblast"))
+to_plot$Class <- factor(to_plot$Class, levels = c("Syncytiotrophoblast", "Other trophoblasts", "Non-trophoblast"))
+
+p1 <- ggplot(data = to_plot, aes(x = rowname_cell_type, y = correlation, fill = Class)) + 
+  geom_boxplot() + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        axis.text.y = element_text(size = 20, colour = "black"),
+        axis.text.x = element_text(size = 20, angle = 37.5, hjust = 1, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 22, face = "bold"),
+        legend.title = element_blank(), 
+        legend.text = element_text(size = 22), 
+        legend.position = "none") +
+  ylab("Divergence (1 - Spearman's rho)") +
+  scale_fill_manual(values = c("Syncytiotrophoblast" = "#006400", "Other trophoblasts" = "#7FBF7B", "Non-trophoblast" = "#E3D3B3"))
+ggsave(filename = paste0("Visuals/c_", ref_sp, que_sp, "_RateOfEvolution_SpearmanRho_WithReplacement_nperm", permutation_N, "_cut", expr_cutoff, ".png"), plot = p1, width = 12, height = 10)
+ggsave(filename = paste0("Visuals/c_", ref_sp, que_sp, "_RateOfEvolution_SpearmanRho_WithReplacement_nperm", permutation_N, "_cut", expr_cutoff, ".pdf"), plot = p1, width = 12, height = 10)
+
+## Concluding the session
+#rm(list = ls())
+```
