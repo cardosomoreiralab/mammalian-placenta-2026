@@ -1,0 +1,127 @@
+---
+title: "Extended Figure 6d: Top 30 contributors to transcriptomic phylogenetic age index (rat)"
+author: "Marcin Falis"
+date: "August 15th, 2026"
+last_update: "October 29th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/ExtendedFigure6/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(ggplot2)
+library(biomaRt)
+library(tidyr)
+library(tibble)
+```
+# Based on pseudobulk (expression)
+```{r}
+## Define variables and files
+expr_cutoff <- 0.5
+ref_pseudobulk <- read.table("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/RatCompleteAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt")
+age_est <- read.table("~/Scratch_MF/MolecularEvolutionAnalysis_July2026/age_of_transcriptome/Data/ReferenceFiles/RatAtlas_AgeOfTranscriptomeInfo_PCG.txt")
+pcg_list <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/GeneLists/PCGs/Rat_rn6.0_PCG.rds")
+pslg_reference <- read.table("~/Scratch_MF/MolecularEvolutionAnalysis_July2026/positively_selected_genes_contribution/PositivelySelectedGenes/Data/ReferenceFiles/Rat_AllGenesTested_ReferenceTable_r105.txt", header = T)
+pslg_reference <- pslg_reference %>% na.omit()
+psl_list <- read.table("~/Scratch_MF/MolecularEvolutionAnalysis_July2026/positively_selected_genes_contribution/PositivelySelectedGenes/Data/ReferenceFiles/rat_pos_sel_genes_list.tab", sep = "\t", header = F)
+psl_list <- psl_list %>% dplyr::rename(ensembl_peptide_id = V1)
+
+## Joining the lists
+psl_list <- left_join(psl_list, pslg_reference) %>% pull(ensembl_gene_id)
+psl_list <- psl_list %>% na.omit() %>% unique()
+
+
+## Define function
+calculateTAI <- function(x) {
+  tai = sum(age * x) / sum(x)
+  tai
+}
+
+## Obtaining gene names to the IDs
+Atlas <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Atlases/Complete/RatCompleteAtlas_FinalVersion_26thMay2026.rds")
+mouse_all_genes <- rownames(Atlas)
+rm(Atlas)
+gene_id_reference <- data.frame(ensembl_gene_id = gsub(pattern = "-.*", replacement = "", x = mouse_all_genes),
+                                gene_name = sub(pattern = "^[^-]+-", replacement = '', x = mouse_all_genes))
+
+## Processing age of transcriptome
+age_est_noNaN <- age_est %>% dplyr::filter(is.na(Age_Adj) == FALSE)
+age_NaN <- age_est %>% dplyr::filter(is.na(Age_Adj)) %>% pull(ensembl_gene_id)
+
+## Processing pseudobulk to retain only PCGs
+ref_pseudobulk[ref_pseudobulk < expr_cutoff] <- 0
+rownames(ref_pseudobulk) <- gsub(pattern = "-.*", replacement = '', x = rownames(ref_pseudobulk))
+to_remove <- rownames(ref_pseudobulk[rowSums(ref_pseudobulk) == 0,])
+ref_pseudobulk <- ref_pseudobulk[!(rownames(ref_pseudobulk) %in% to_remove),]
+ref_pseudobulk <- ref_pseudobulk[rownames(ref_pseudobulk) %in% pcg_list,]
+
+## Merging
+data <- ref_pseudobulk %>% 
+  rownames_to_column("ensembl_gene_id") %>% 
+  dplyr::filter(ensembl_gene_id %in% age_est_noNaN$ensembl_gene_id) %>%
+  left_join(age_est_noNaN) %>% 
+  column_to_rownames("ensembl_gene_id") %>%
+  dplyr::select(Age_Adj, everything())
+age <- data$Age_Adj
+top_drivers <- data %>% 
+  dplyr::select(Age_Adj, SpT) %>% 
+  dplyr::mutate(per_gene_tai = Age_Adj*SpT) %>%
+  dplyr::mutate(fraction_cont = per_gene_tai / sum(per_gene_tai)) %>%
+  dplyr::arrange(desc(fraction_cont))
+top_drivers$positively_selected <- rownames(top_drivers) %in% psl_list
+top_drivers <- top_drivers %>% dplyr::mutate(positively_selected = case_when(positively_selected == "TRUE" ~ "Yes", .default = "No"))
+
+## Sanity check - fraction contribution should add up to 1
+sum <- sum(top_drivers$fraction_cont)
+stopifnot(sum == 1)
+
+## Subsetting
+top_drivers <- top_drivers %>% 
+  dplyr::mutate(rank = row_number()) %>%
+  rownames_to_column("ensembl_gene_id") %>%
+  dplyr::select(ensembl_gene_id, fraction_cont, rank, positively_selected) %>%
+  head(n=30) %>%
+  left_join(gene_id_reference)
+
+top_drivers <- top_drivers %>% dplyr::mutate(gene_family = case_when(gene_name %in% c("Tpbpa", "Ctsm") ~ "Cathepsin",
+                                   gene_name %in% c("Prl8a5", "Prl8a2", "Prl6a1", "Prl4a1", "Prl8a7", "Prl7a4", "Prl3b1", "Prl7a3") ~ "Prolactin",
+                                   gene_name %in% c("Ceacam12", "Ceacam11", "Psg29", "Ceacam3", "LOC102557319", "Psgb1", "LOC102557244", "Cgm4") ~ "CEA", .default = "Other"))
+top_drivers$gene_family <- factor(top_drivers$gene_family, levels = c("CEA", "Prolactin", "Cathepsin", "Other"))
+top_drivers$positively_selected <- factor(top_drivers$positively_selected, levels = c("Yes", "No"))
+
+p1 <- ggplot(data = top_drivers, mapping = aes(x = reorder(gene_name, desc(fraction_cont)), y = fraction_cont, fill = gene_family, shape = positively_selected)) + 
+  geom_point(size = 10) + 
+   theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        text = element_text(colour = "black"),
+        axis.text.y = element_text(size = 20, colour = "black"), 
+        axis.text.x = element_text(size = 19, angle = 37.5, hjust = 1, colour = "black"), 
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 20, face = "bold"),
+        legend.title = element_text(size = 20, face = "bold", hjust = 0.5, vjust = 1, colour = "black"),
+        legend.title.position = "top",
+        legend.position = "bottom",
+        legend.text = element_text(size = 20)) + 
+  ylab("Contribution to the transcriptome phylogenetic age") + 
+  scale_fill_manual(name = "Family", values = c("Cathepsin" = "#C982B8", "Prolactin" = "#08418F", "CEA" = "#E69500", "Other" = "grey60")) +
+  scale_shape_manual(name = "Positive selection signature", values = c("Yes" = 23, "No" = 21)) + 
+  guides(fill = guide_legend(override.aes = list(shape = 21, size = 8)))
+
+ggsave(filename = "Visuals/d_Rat_SpT_top30TAIContributors.png", plot = p1, width = 12, height = 10)
+ggsave(filename = "Visuals/d_Rat_SpT_top30TAIContributors.pdf", plot = p1, width = 12, height = 10)
+
+## Cleaning up
+rm(list = ls())
+```
+
+
+

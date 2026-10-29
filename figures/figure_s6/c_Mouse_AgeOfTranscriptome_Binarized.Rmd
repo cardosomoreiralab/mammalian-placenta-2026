@@ -1,0 +1,104 @@
+---
+title: "Extended Figure 6c: Mouse Transcriptomic Phylogenetic Age (Binarized)"
+author: "Marcin Falis"
+date: "August 6th, 2026"
+last_update: "October 29th, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/ExtendedFigure6/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+library(biomaRt)
+library(tibble)
+library(tidyr)
+library(rtracklayer)
+library(factoextra)
+library(forcats)
+```
+# Based on pseudobulk (binarized)
+```{r}
+## Define variables and files
+binarized_cutoff <- 0.5
+ref_pseudobulk <- read.table("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Pseudobulks/MouseCompleteAtlas_AveragePseudobulk_ByCellType_26thMay2026.txt")
+age_est <- read.table("~/Scratch_MF/MolecularEvolutionAnalysis_July2026/age_of_transcriptome/Data/ReferenceFiles/MouseAtlas_AgeOfTranscriptomeInfo_PCG.txt")
+pcg_list <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/GeneLists/PCGs/Mouse_GRCM39_PCG.rds")
+
+
+## Define function
+calculateTAI <- function(x) {
+  tai = sum(age * x) / sum(x)
+  tai
+}
+
+## Processing age of transcriptome
+age_est_noNaN <- age_est %>% dplyr::filter(is.na(Age_Adj) == FALSE)
+age_NaN <- age_est %>% dplyr::filter(is.na(Age_Adj)) %>% pull(ensembl_gene_id)
+
+## Processing pseudobulk to retain only PCGs
+ref_pseudobulk[ref_pseudobulk < binarized_cutoff] <- 0
+to_remove <- rownames(ref_pseudobulk[rowSums(ref_pseudobulk) == 0,])
+ref_pseudobulk <- ref_pseudobulk[!(rownames(ref_pseudobulk) %in% to_remove),]
+ref_pseudobulk <- ref_pseudobulk[rownames(ref_pseudobulk) %in% pcg_list,]
+ref_pseudobulk[ref_pseudobulk >= binarized_cutoff] <- 1
+
+## Merging
+data <- ref_pseudobulk %>% 
+  rownames_to_column("ensembl_gene_id") %>% 
+  dplyr::filter(ensembl_gene_id %in% age_est_noNaN$ensembl_gene_id) %>%
+  left_join(age_est_noNaN) %>% 
+  column_to_rownames("ensembl_gene_id") %>%
+  dplyr::select(Age_Adj, everything())
+age <- data$Age_Adj
+
+## Calculating and formatting
+mouse_tai <- apply(data[,-1], 2, function(x) calculateTAI(x))
+mouse_tai <- data.frame(cell.type = names(mouse_tai), TAI = mouse_tai, row.names = NULL)
+mouse_tai <- mouse_tai %>%
+  mutate(Class = case_when(cell.type %in% c("SpT", "STGC", "SynTI", "SynTII") ~ "Novel trophoblast",
+                                                cell.type %in% c("precSTGC", "precSynTI") ~ "Novel trophoblast precursors", 
+                                                .default = "Other"))
+
+## Plotting
+p1 <- ggplot(data = mouse_tai, aes(x = reorder(cell.type, -TAI), y = TAI, fill = Class)) + 
+  geom_point(size = 10, shape = 21, colour = "black", stroke = 1) + 
+   theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        text = element_text(colour = "black"),
+        axis.text.y = element_text(size = 20, colour = "black"), 
+        axis.text.x = element_text(size = 20, angle = 37.5, hjust = 1, colour = "black"), 
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 20, face = "bold"),
+        legend.title = element_blank(),
+        legend.position = "none",
+        legend.text = element_text(size = 20)) +
+  scale_fill_manual(values = c("Novel trophoblast" = "#006400", "Novel trophoblast precursors" = "#7FBF7B", "Other" = "#E3D3B3")) + 
+  ylab("Transcriptomic phylogenetic age 
+       (binarized expression)")
+p1
+
+## Saving
+ggsave(filename = paste0("Visuals/c_Mouse_TAI_PseudobulkBinarized_cut", binarized_cutoff, ".png"), plot = p1, width = 12, height = 10)
+ggsave(filename = paste0("Visuals/c_Mouse_TAI_PseudobulkBinarized_cut", binarized_cutoff, ".pdf"), plot = p1, width = 12, height = 10)
+
+## Clean up
+rm(list = ls())
+```
