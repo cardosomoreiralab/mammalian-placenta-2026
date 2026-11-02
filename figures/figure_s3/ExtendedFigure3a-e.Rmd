@@ -1,0 +1,375 @@
+---
+title: "Generating Extended Figure 3: Plotting markers for murids, primates, and guinea pig/rabbit"
+author: "Marcin Falis"
+date: "June 19th, 2026"
+last_update: "November 2nd, 2026"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/2026_Falis_et_al/ExtendedFigure3/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+library(tidyr)
+library(tibble)
+library(biomaRt)
+```
+# Extended Figure 3a: Plotting trophoblast numbers
+```{r}
+# Creating a vector to store # trophoblasts
+troph_num <- c()
+
+# Loading atlases
+mouse_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/MouseTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+troph_num <- append(x = troph_num, values = nrow(mouse_atlas@meta.data))
+rm(mouse_atlas)
+
+# Rat
+rat_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/RatTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+troph_num <- append(x = troph_num, values = nrow(rat_atlas@meta.data))
+rm(rat_atlas)
+
+# Human
+human_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/HumanTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+troph_num <- append(x = troph_num, values = nrow(human_atlas@meta.data))
+rm(human_atlas)
+
+# Marmoset
+marmoset_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/MarmosetTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+troph_num <- append(x = troph_num, values = nrow(marmoset_atlas@meta.data))
+rm(marmoset_atlas)
+
+# Rabbit
+rabbit_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/RabbitTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+troph_num <- append(x = troph_num, values = nrow(rabbit_atlas@meta.data))
+rm(rabbit_atlas)
+
+# Guinea Pig
+guineapig_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/GuineaPigTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+troph_num <- append(x = troph_num, values = nrow(guineapig_atlas@meta.data))
+rm(guineapig_atlas)
+
+## Plotting
+names(troph_num) <- c("Mouse", "Rat", "Human", "Marmoset", "Rabbit", "Guinea Pig")
+df <- data.frame("Species" = names(troph_num), "Number" = troph_num)
+df$Species <- factor(df$Species, levels = c("Human", "Mouse", "Rat", "Guinea Pig", "Rabbit", "Marmoset"))
+p1 <- ggplot(data = df, aes(x = Species, y = Number)) +
+  geom_bar(stat = "identity", fill = "brown") +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        plot.title = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 20, angle = 45, vjust = 1, hjust = 1, face = "bold", colour = "black"),
+        axis.text.y = element_text(size = 20, colour = "black"),
+        axis.title.y = element_text(face = "bold", size = 22, colour = "black")) +
+  ylab("Number of cells")
+
+## Saving
+ggsave(filename = "Visuals/a_TrophoblastNumbers.png", plot = p1, width = 10, height = 8)
+ggsave(filename = "Visuals/a_TrophoblastNumbers.pdf", plot = p1, width = 10, height = 8)
+
+## Emptying the environment
+rm(list = ls())
+```
+# Extended Figure 3b: Mouse labelled by pregnancy stage
+```{r}
+## Loading the atlas
+MouseAtlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/MouseTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+## Re-leveling the pregnancy stages
+MouseAtlas@meta.data$preg.stage <- factor(MouseAtlas@meta.data$preg.stage, levels = c("e8.5", "e10.5", "e14.5", "e18.5"))
+
+## Plotting
+p1 <- DimPlot(MouseAtlas, group.by = "preg.stage") +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_blank(),
+        legend.justification = "center",
+        legend.box.just = "center",
+        legend.text = element_text(size = 16, face = "bold")) +
+  guides(color = guide_legend(override.aes = list(size = 8)))
+p1
+
+## Saving
+ggsave(filename = "Visuals/b_Mouse_UMAP_PregStage.png", plot = p1, width = 8, height = 5)
+ggsave(filename = "Visuals/b_Mouse_UMAP_PregStage.pdf", plot = p1, width = 8, height = 5)
+
+## Emptying the environment
+rm(list = ls())
+```
+# Extended Figure 3c: Murid rodent trophoblast markers
+```{r}
+# Loading relevant files
+orthology <- read.table("../ReferenceFiles/OrthologyLists/Homology_1to1/MouseRat_Homology_1to1_r104.txt")
+mouse_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/MouseTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+rat_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/RatTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+## Setting up appropriate idents
+Idents(mouse_atlas) <- "cell.type.short"
+Idents(rat_atlas) <- "cell.type.short"
+
+## Subsetting to keep only genes that I will be plotting
+markers <- c("ENSMUSG00000033419-Snap91", "ENSMUSG00000022797-Tfrc", "ENSMUSG00000034762-Glis1", "ENSMUSG00000026235-Epha4", "ENSMUSG00000029999-Tgfa", "ENSMUSG00000032327-Stra6", "ENSMUSG00000057722-Lepr", "ENSMUSG00000021439-Ctsq", "ENSMUSG00000038891-Prl3b1", "ENSMUSG00000038473-Nos1ap", "ENSMUSG00000025608-Podxl", "ENSMUSG00000057170-Prl3d1", "ENSMUSG00000030790-Adm", "ENSMUSG00000023333-Gcm1", "ENSMUSG00000040584-Abcb1a", "ENSMUSG00000029843-Slc13a4", "ENSMUSG00000020140-Lgr5", "ENSMUSG00000017723-Wfdc2", "ENSMUSG00000097039-Pvt1", "ENSMUSG00000031004-Mki67", "ENSMUSG00000045394-Epcam", "ENSMUSG00000007209-Ceacam9", "ENSMUSG00000069259-Prl6a1", "ENSMUSG00000039126-Prune2", "ENSMUSG00000007892-Rplp1", "ENSMUSG00000070796-Psg21", "ENSMUSG00000046899-Prl7a2", "ENSMUSG00000021346-Prl8a8", "ENSMUSG00000035158-Mitf", "ENSMUSG00000033834-Tpbpa", "ENSMUSG00000024440-Pcdh12", "ENSMUSG00000070719-Pla2g4d", "ENSMUSG00000021347-Prl7b1", "ENSMUSG00000060738-Prl7c1", "ENSMUSG00000034220-Gpc1", "ENSMUSG00000062551-Prl2c1", "ENSMUSG00000055360-Prl2c5")
+to_keep <- gsub(pattern = "-.*", replacement = '', x = markers)
+orthologous_markers <- orthology %>% dplyr::filter(Mouse.gene.stable.ID %in% to_keep)
+
+# Mouse
+## Extract genes
+to_plot <- c()
+for (i in 1:length(orthologous_markers$Mouse.gene.stable.ID)) {
+  to_plot <- append(x = to_plot, values = grep(pattern = orthologous_markers$Mouse.gene.stable.ID[i], x = rownames(mouse_atlas[["RNA"]]), value = T))
+}
+
+p1 <- DotPlot(object = mouse_atlas, features = to_plot)
+plot_data_mouse <- p1$data
+plot_data_mouse$species <- "Mouse"
+
+## Rat
+## Extract genes
+to_plot <- c()
+for (i in 1:length(orthologous_markers$Rat.gene.stable.ID)) {
+  to_plot <- append(x = to_plot, values = grep(pattern = orthologous_markers$Rat.gene.stable.ID[i], x = rownames(rat_atlas[["RNA"]]), value = T))
+}
+p1 <- DotPlot(object = rat_atlas, features = to_plot)
+plot_data_rat <- p1$data
+plot_data_rat$species <- "Rat"
+
+## Plotting
+plot_data_mouse <- plot_data_mouse %>% mutate(gene_id = gsub(pattern = "-.*", replacement = '', x = features.plot))
+plot_data_rat <- plot_data_rat %>% mutate(gene_id = gsub(pattern = "-.*", replacement = '', x = features.plot)) %>% left_join(y = orthologous_markers %>% dplyr::select(Mouse.gene.stable.ID, Rat.gene.stable.ID), by = c("gene_id" = "Rat.gene.stable.ID")) %>% dplyr::select(-gene_id) %>% dplyr::rename(gene_id = Mouse.gene.stable.ID)
+
+## Combining
+plot_data_combined <- rbind(plot_data_mouse, plot_data_rat)
+
+## Adding gene names following the mouse convention
+gene_names <- plot_data_combined %>% dplyr::filter(species == "Mouse") %>% dplyr::select(features.plot, gene_id) %>% unique() %>% mutate(gene_name = sub(pattern = "^[^-]+-", replacement = '', x = features.plot)) %>% dplyr::select(gene_id, gene_name)
+plot_data_combined <- left_join(plot_data_combined, gene_names)
+plot_data_combined$id_final <- paste0(plot_data_combined$id, "_", plot_data_combined$species)
+
+## Adjusting the order
+plot_data_combined$id <- factor(plot_data_combined$id, levels = c("SynTI", "precSynTI", "STGC", "precSTGC", "precPTGC", "SynTII", "precSynTII", "LaTP", "JZTP", "precSpT", "SpT", "GlyT", "SpATGC", "InvTroph"))
+plot_data_combined$gene_name <- factor(plot_data_combined$gene_name, levels = rev(c("Snap91", "Tfrc", "Glis1", "Epha4", "Tgfa", "Stra6", "Lepr", "Ctsq", "Prl3b1", "Nos1ap", "Podxl", "Adm", "Gcm1", "Slc13a4", "Lgr5", "Wfdc2", "Epcam", "Mki67", "Prl6a1", "Ceacam9", "Prl8a8", "Mitf", "Prl7b1", "Pcdh12", "Pla2g4d", "Prl7c1", "Gpc1")))
+plot_data_combined$species <- factor(plot_data_combined$species, levels = c("Mouse", "Rat"))
+
+p1 <- ggplot(data = plot_data_combined, mapping = aes(x = id, y = gene_name)) +
+  geom_point(aes(size = pct.exp, color = avg.exp.scaled)) +
+  scale_color_gradient(low = "lightgrey", high = "blue") +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        axis.title = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 14, colour = "black"),
+        axis.text.y = element_text(size = 14, colour = "black"),
+        strip.background = element_rect(color="white", fill="white", size=1.5, linetype="solid"),
+        strip.text.x = element_text(size = 20, color = "black", face = "bold"),
+        panel.spacing = unit(2, "lines"),
+        legend.position = "bottom", 
+        legend.title.position = "top", 
+        legend.title = element_text(hjust = 0.5, vjust = 1, face = "bold", size = 18),
+        legend.text = element_text(size = 18, color = "black")) +
+  facet_wrap(~species, scales = "free_x") +
+  labs(color = "Average Expression (scaled)", size = "% cells expressing")
+p1
+
+## Saving
+ggsave(filename = "Visuals/c_Murid_markers.png", plot = p1, width = 10, height = 9)
+ggsave(filename = "Visuals/c_Murid_markers.pdf", plot = p1, width = 10, height = 9)
+
+## Concluding
+rm(list = ls())
+```
+# Extended Figure 3d: Primate rodent trophoblast markers
+```{r}
+# Loading relevant files
+orthology <- read.table("../ReferenceFiles/OrthologyLists/Homology_1to1/HumanMarmoset_Homology_1to1_r105.txt")
+human_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/HumanTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+marmoset_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/MarmosetTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+## Renaming orthology columns
+colnames(orthology) <- c("Gene.stable.ID", "Marmoset.gene.stable.ID", "Marmoset.homology.type")
+
+## Setting up appropriate idents
+Idents(human_atlas) <- "cell.type.short"
+Idents(marmoset_atlas) <- "cell.type.short"
+
+## Subsetting to keep only genes that I will be plotting
+markers <- c("ENSG00000185269-NOTUM", "ENSG00000116260-QSOX1", "ENSG00000204632-HLA-G", "ENSG00000113319-RASGRF2", "ENSG00000115414-FN1", "ENSG00000153395-LPCAT1", "ENSG00000115221-ITGB6", "ENSG00000130595-TNNT3", "ENSG00000081479-LRP2", "ENSG00000073282-TP63", "ENSG00000105976-MET", "ENSG00000039068-CDH1", "ENSG00000244476-ERVFRD-1", "ENSG00000269526-ERVV-1", "ENSG00000268964-ERVV-2", "ENSG00000180875-GREM2", "ENSG00000164707-SLC13A4", "ENSG00000137869-CYP19A1", "ENSG00000242950-ERVW-1", "ENSG00000243137-PSG4", "ENSG00000204941-PSG5", "ENSG00000170848-PSG6", "ENSG00000113916-BCL6", "ENSG00000172493-AFF1", "ENSG00000137270-GCM1", "ENSG00000182752-PAPPA", "ENSG00000102755-FLT1", "ENSG00000135111-TBX3")
+to_keep <- gsub(pattern = "-.*", replacement = '', x = markers)
+orthologous_markers <- orthology %>% dplyr::filter(Gene.stable.ID %in% to_keep)
+
+grep("TBX3", rownames(human_atlas[["RNA"]]), value = T)
+
+# Human
+## Extract genes
+to_plot <- c()
+for (i in 1:length(orthologous_markers$Gene.stable.ID)) {
+  to_plot <- append(x = to_plot, values = grep(pattern = orthologous_markers$Gene.stable.ID[i], x = rownames(human_atlas[["RNA"]]), value = T))
+}
+
+p1 <- DotPlot(object = human_atlas, features = to_plot)
+plot_data_human <- p1$data
+plot_data_human$species <- "Human"
+
+## Marmoset
+## Extract genes
+to_plot <- c()
+for (i in 1:length(orthologous_markers$Marmoset.gene.stable.ID)) {
+  to_plot <- append(x = to_plot, values = grep(pattern = orthologous_markers$Marmoset.gene.stable.ID[i], x = rownames(marmoset_atlas[["RNA"]]), value = T))
+}
+p1 <- DotPlot(object = marmoset_atlas, features = to_plot)
+plot_data_marmoset <- p1$data
+plot_data_marmoset$species <- "Marmoset"
+
+## Plotting
+plot_data_human <- plot_data_human %>% mutate(gene_id = gsub(pattern = "-.*", replacement = '', x = features.plot))
+plot_data_marmoset <- plot_data_marmoset %>% mutate(gene_id = gsub(pattern = "-.*", replacement = '', x = features.plot)) %>% left_join(y = orthologous_markers %>% dplyr::select(Gene.stable.ID, Marmoset.gene.stable.ID), by = c("gene_id" = "Marmoset.gene.stable.ID")) %>% dplyr::select(-gene_id) %>% dplyr::rename(gene_id = Gene.stable.ID)
+
+## Combining
+plot_data_combined <- rbind(plot_data_human, plot_data_marmoset)
+
+## Adding gene names following the mouse convention
+gene_names <- plot_data_combined %>% dplyr::filter(species == "Human") %>% dplyr::select(features.plot, gene_id) %>% unique() %>% mutate(gene_name = sub(pattern = "^[^-]+-", replacement = '', x = features.plot)) %>% dplyr::select(gene_id, gene_name)
+plot_data_combined <- left_join(plot_data_combined, gene_names)
+plot_data_combined$id_final <- paste0(plot_data_combined$id, "_", plot_data_combined$species)
+
+## Adjusting the order
+plot_data_combined$id <- factor(plot_data_combined$id, levels = c("fCTB", "STB", "EVT", "cCTB", "CTB"))
+plot_data_combined$gene_name <- factor(plot_data_combined$gene_name, levels = rev(c("ERVFRD-1", "SLC13A4", "GREM2", "TBX3", "PAPPA", "CYP19A1", "AFF1", "BCL6", "FLT1", "GCM1", "NOTUM", "QSOX1", "HLA-G", "RASGRF2",  "FN1", "LPCAT1",  "ITGB6", "TNNT3", "CDH1", "TP63", "MET", "LRP2")))
+plot_data_combined$species <- factor(plot_data_combined$species, levels = c("Human", "Marmoset"))
+
+p1 <- ggplot(data = plot_data_combined, mapping = aes(x = id, y = gene_name)) +
+  geom_point(aes(size = pct.exp, color = avg.exp.scaled)) +
+  scale_color_gradient(low = "lightgrey", high = "blue") +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        axis.title = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 14, colour = "black"),
+        axis.text.y = element_text(size = 14, colour = "black"),
+        strip.background = element_rect(color="white", fill="white", size=1.5, linetype="solid"),
+        strip.text.x = element_text(size = 20, color = "black", face = "bold"),
+        panel.spacing = unit(2, "lines"),
+        legend.position = "bottom", 
+        legend.title.position = "top", 
+        legend.title = element_text(hjust = 0.5, vjust = 1, face = "bold", size = 18),
+        legend.text = element_text(size = 18, color = "black")) +
+  facet_wrap(~species, scales = "free_x", ncol = 1) +
+  labs(color = "Average Expression (scaled)", size = "% cells expressing")
+p1
+
+## Saving
+ggsave(filename = "Visuals/d_Primate_markers.png", plot = p1, width = 8, height = 12)
+ggsave(filename = "Visuals/d_Primate_markers.pdf", plot = p1, width = 8, height = 12)
+
+## Emptying
+rm(list = ls())
+```
+# Extended Figure 2e: Guinea pig & rabbit trophoblast markers
+```{r}
+# Loading relevant files
+orthology <- read.table("../ReferenceFiles/OrthologyLists/Homology_1to1/RabbitGuineaPig_Homology_1to1_r104.txt")
+rabbit_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/RabbitTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+guineapig_atlas <- readRDS("../ReferenceFiles/Atlases/Trophoblast/GuineaPigTrophoblastAtlas_FinalVersion_26thMay2026.rds")
+
+## Renaming orthology columns
+colnames(orthology) <- c("Gene.stable.ID", "Guinea.Pig.gene.stable.ID", "Guinea.Pig.homology.type")
+
+## Setting up appropriate idents
+Idents(rabbit_atlas) <- "cell.type.short"
+Idents(guineapig_atlas) <- "cell.type.short"
+
+## Selecting markers in rabbit
+markers <- c("ENSOCUG00000007461-NAV1", "ENSOCUG00000011742-CA2", "ENSOCUG00000011357-ITGA1", "ENSOCUG00000010104-FN1", "ENSOCUG00000013232-COL4A1", "ENSOCUG00000013276-COL4A2", "ENSOCUG00000004072-TEAD3","ENSOCUG00000007839-IL6ST",  "ENSOCUG00000009246-GCM1", "ENSOCUG00000001867-SLC13A4", "ENSOCUG00000014981-ABCB1" , "ENSOCUG00000014985-GRB10", "ENSOCUG00000016465-TP63", "ENSOCUG00000005107-HOPX", "ENSOCUG00000006927-ARHGAP42", "ENSOCUG00000008523-FLT1", "ENSOCUG00000000265-SNAP91", "ENSOCUG00000017033-TFRC", "ENSOCUG00000005429-BCL6", "ENSOCUG00000006223-EPCAM", "ENSOCUG00000001719-DIAPH3")
+to_keep <- gsub(pattern = "-.*", replacement = '', x = markers)
+orthologous_markers <- orthology %>% dplyr::filter(Gene.stable.ID %in% to_keep)
+
+# Rabbit
+## Extract genes
+to_plot <- c()
+for (i in 1:length(orthologous_markers$Gene.stable.ID)) {
+  to_plot <- append(x = to_plot, values = grep(pattern = orthologous_markers$Gene.stable.ID[i], x = rownames(rabbit_atlas[["RNA"]]), value = T))
+}
+
+p1 <- DotPlot(object = rabbit_atlas, features = to_plot)
+plot_data_rabbit <- p1$data
+plot_data_rabbit$species <- "Rabbit"
+
+## Guinea Pig
+## Extract genes
+to_plot <- c()
+for (i in 1:length(orthologous_markers$Guinea.Pig.gene.stable.ID)) {
+  to_plot <- append(x = to_plot, values = grep(pattern = orthologous_markers$Guinea.Pig.gene.stable.ID[i], x = rownames(guineapig_atlas[["RNA"]]), value = T))
+}
+p1 <- DotPlot(object = guineapig_atlas, features = to_plot)
+plot_data_guineapig <- p1$data
+plot_data_guineapig$species <- "Guinea Pig"
+
+## Plotting
+plot_data_rabbit <- plot_data_rabbit %>% mutate(gene_id = gsub(pattern = "-.*", replacement = '', x = features.plot))
+plot_data_guineapig <- plot_data_guineapig %>% mutate(gene_id = gsub(pattern = "-.*", replacement = '', x = features.plot)) %>% left_join(y = orthologous_markers %>% dplyr::select(Gene.stable.ID, Guinea.Pig.gene.stable.ID), by = c("gene_id" = "Guinea.Pig.gene.stable.ID")) %>% dplyr::select(-gene_id) %>% dplyr::rename(gene_id = Gene.stable.ID)
+
+## Combining
+plot_data_combined <- rbind(plot_data_rabbit, plot_data_guineapig)
+
+## Adding gene names following the mouse convention
+gene_names <- plot_data_combined %>% dplyr::filter(species == "Rabbit") %>% dplyr::select(features.plot, gene_id) %>% unique() %>% mutate(gene_name = sub(pattern = "^[^-]+-", replacement = '', x = features.plot)) %>% dplyr::select(gene_id, gene_name)
+plot_data_combined <- left_join(plot_data_combined, gene_names)
+plot_data_combined$id_final <- paste0(plot_data_combined$id, "_", plot_data_combined$species)
+
+## Adjusting the order
+plot_data_combined$id <- factor(plot_data_combined$id, levels = c("InvTroph", "fCTB", "STB", "TrophProg"))
+
+plot_data_combined$gene_name <- factor(plot_data_combined$gene_name, levels = rev(c("CA2","FN1", "TEAD3", "ITGA1", "NAV1", "COL4A1", "COL4A2", "IL6ST",  "SLC13A4", "GCM1", "FLT1", "GRB10", "BCL6", "TFRC", "HOPX", "ARHGAP42", "TP63", "SNAP91", "EPCAM", "DIAPH3")))
+plot_data_combined$species <- factor(plot_data_combined$species, levels = c("Rabbit", "Guinea Pig"))
+
+p1 <- ggplot(data = plot_data_combined, mapping = aes(x = id, y = gene_name)) +
+  geom_point(aes(size = pct.exp, color = avg.exp.scaled)) +
+  scale_color_gradient(low = "lightgrey", high = "blue", n.breaks = 5) +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        axis.title = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 14, colour = "black"),
+        axis.text.y = element_text(size = 14, colour = "black"),
+        strip.background = element_rect(color="white", fill="white", size=1.5, linetype="solid"),
+        strip.text.x = element_text(size = 20, color = "black", face = "bold"),
+        panel.spacing = unit(2, "lines"),
+        legend.position = "bottom", 
+        legend.title.position = "top", 
+        legend.title = element_text(hjust = 0.5, vjust = 1, face = "bold", size = 18),
+        legend.text = element_text(size = 20, color = "black")) +
+  facet_wrap(~species, scales = "free_x", ncol = 1) +
+  labs(color = "Average Expression (scaled)", size = "% cells expressing")
+p1
+
+## Saving
+ggsave(filename = "Visuals/e_GuineaPigRabbit_markers.png", plot = p1, width = 8, height = 12)
+ggsave(filename = "Visuals/e_GuineaPigRabbit_markers.pdf", plot = p1, width = 8, height = 12)
+
+## Emptying
+#rm(list = ls())
+```
+## Concluding the session
+```{r}
+sessionInfo()
+```
+
+
+
