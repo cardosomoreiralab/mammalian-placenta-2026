@@ -1,0 +1,113 @@
+---
+title: "Extended Figure 7a: Plotting ArchR UMAP"
+author: "Marcin Falis"
+date: 'March 11th, 2026'
+last_update: 'November 5th, 2026'
+output: html_document
+---
+# Setting up the working directory
+```{r setup}
+require("knitr")
+opts_knit$set(root.dir = "/nemo/lab/cardoso-moreiam/home/users/falism/2026_Falis_et_al/ExtendedFigure7/")
+options(bitmapType="cairo")
+```
+# Loading packages
+```{r}
+library(dplyr)
+library(ArchR)
+library(Seurat)
+library(BSgenome)
+library(BSgenome.Mmusculus.UCSC.mm39)
+library(org.Mm.eg.db)
+library("GenomicFeatures")
+library(parallel)
+library(BiocGenerics)
+library(ComplexHeatmap)
+library(factoextra)
+library(dendextend)
+library(ggdendro)
+library(Gviz)
+```
+# Setting up general ArchR parameters
+```{r}
+addArchRLocking(locking = TRUE)
+addArchRThreads(threads = 64)
+```
+## Loading the project
+```{r}
+## Loading the project
+proj_test_5 <- loadArchRProject("~/Scratch_MF/ATAC/sc_Mm/combined_analysis_final/Data/combined_analysis_v5_annotated_peakscalled/")
+
+## Extracting embedding and metadata to plot the UMAP in ggplot2/Seurat
+umap_coordinates <- getEmbedding(ArchRProj = proj_test_5, embedding = "UMAP")
+meta <- getCellColData(proj_test_5) %>% as.data.frame()
+umap_plotting <- cbind(umap_coordinates, meta[rownames(umap_coordinates),])
+umap_plotting <- umap_plotting %>% dplyr::rename("UMAP1" = "IterativeLSI#UMAP_Dimension_1", "UMAP2" = "IterativeLSI#UMAP_Dimension_2")
+
+## Colour palette
+palette <- c("Bcells" = "#7FB3D5",
+              "uNK" = "#08519C",
+              "Macrophages" = "#3182BD",
+              "Monocytes" = "#08306B",
+             "Erythroid" = "#6A3D9A",
+             "DecidualStromal" = "#E6AB02",
+             "EndothelialMaternal" = "#C71585",
+              "Fibroblast" = "#A6761D",
+             "ParietalYolkSac" = "#969696",
+             "LabyrinthTrophoblastProgenitors" = "#005F66",
+             "JunctionalZoneTrophoblastProgenitors" = "#007F86",
+             "Spongiotrophoblast" = "#009FA6",
+             "GlycogenTrophoblast" = "#00BFC4",
+             "SinusoidalTGC" = "#33CCD1",
+             "SyncytiotrophoblastI" = "#66D9DE",
+             "SyncytiotrophoblastII" = "#99E6EA")
+
+## Plotting UMAP
+p1 <- ggplot(umap_plotting, aes(UMAP1, UMAP2, color = FinalCellTypeAnnotation_fromRNA)) +
+  geom_point(size = 0.3, alpha = 0.7) +
+  theme(panel.background = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        legend.position = "none",
+        plot.title = element_blank()) +
+  scale_colour_manual(values = palette)
+ggsave(filename = "Visuals/a_ATAC_UMAP_Annotated.png", plot = p1, width = 12, height = 10)
+ggsave(filename = "Visuals/a_ATAC_UMAP_Annotated.pdf", plot = p1, width = 12, height = 10)
+
+## Cleaning up
+rm(list = setdiff(ls(), "palette"))
+```
+## Plotting the accompanying legend
+```{r}
+legend_data <- data.frame(cell_type = names(palette), color = palette)
+rownames(legend_data) <- NULL
+legend_data$category <- c(rep("Immune cells", 4), rep("Other blood cells", 1), rep("Uterine", 1), rep("Endothelial", 1), rep("Stromal", 1), rep("Yolk sac", 1), rep("Trophoblast", 7))
+legend_data$cell_label <- c("B-cells", "uNK", "Macrophages", "Monocytes", "Erythroid", "DSC", "Endothelial (M)", "Fibroblast", "Parietal", "Labyrinth progenitors", "JZ progenitors", "Spongiotrophoblast", "GlyT", "sinusoidal-TGC", "SynT I", "SynT II")
+legend_data$y <- c(11:8, 6, 4, 2, 11, 9, 7:1)
+legend_data$x <- c(rep(0,7), rep(1,9))
+legend_data
+
+p_legend <- ggplot(legend_data, aes(x = x, y = y)) +
+  geom_point(aes(color = cell_type), size = 5) +  # colored box
+  geom_text(aes(label = cell_label), hjust = 0, nudge_x = 0.2, size = 4) + # cell type labels
+  scale_color_manual(values = setNames(legend_data$color, legend_data$cell_type)) +
+  # Add category headers as text (we place them manually)
+  geom_text(
+    data = subset(legend_data, !duplicated(category)),
+    aes(x = x - 0.2, y = y + 1, label = category),
+    hjust = 0, vjust = 1, fontface = "bold", size = 5) +
+  xlim(-0.5, 2) +   # space for labels
+  theme_void() +
+  theme(legend.position = "none")
+
+
+# Save figure
+ggsave("Visuals/a_ATAC_UMAP_Legend.png", plot = p_legend, width = 6, height = 4, dpi = 300)
+ggsave("Visuals/a_ATAC_UMAP_Legend.pdf", plot = p_legend, width = 6, height = 4)
+```
+## Concluding the session
+```{r}
+sessionInfo()
+```
