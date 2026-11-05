@@ -1,0 +1,1230 @@
+---
+title: "Figure 5: Regulon activity analysis"
+author: "Marcin Falis"
+date: '25th August, 2026'
+last_update: 'November 5th, 2026'
+output: html_document
+---
+# Setting up the working directory
+```{r setup}
+require("knitr")
+opts_knit$set(root.dir = "/nemo/lab/cardoso-moreiam/home/users/falism/2026_Falis_et_al/Figure5/")
+options(bitmapType="cairo")
+```
+# Loading packages
+```{r}
+library(dplyr)
+library(ArchR)
+library(Seurat)
+library(tidyverse)
+library(igraph)
+library(ggraph)
+library(tidygraph)
+library(ComplexHeatmap)
+library(ggplot2)
+library(GeneOverlap)
+library(ggtext)
+```
+## Figure 5a: Regulon activity heatmap using AUC binarize
+```{r}
+# 1. SETUP & DATA LOADING
+seurat_obj <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Atlases/Complete/MouseCompleteAtlas_FinalVersion_26thMay2026.rds")
+eReg_raw <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/eRegulon_direct.tsv", sep = "\t") 
+auc_binary <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/BinarizedMtx_AUCBinarize_MedianPerCellType.csv", check.names = FALSE) # Verified - only +/+ regulons present
+
+# 2. HELPER: RNA VALIDATION
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# Filters TFs to only those expressed above a certain threshold
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# 3. CORE PROCESSING LOGIC
+rna_valid <- get_expressed_tfs(seurat_obj)
+rna_valid$gene <- sub("^[^-]+-", "", rna_valid$gene)
+ 
+active_regulons <- auc_binary %>%
+  pivot_longer(-cell.type.short, names_to = "eRegulon", values_to = "active") %>%
+  mutate(eRegulon = gsub(pattern = "_.*", replacement = '', x = eRegulon)) %>% 
+  inner_join(rna_valid, by = c("cell.type.short" = "cell_type", "eRegulon" = "gene"))
+
+# 4. EVALUATING
+test <- active_regulons %>% 
+  dplyr::select(-expression) %>% 
+  pivot_wider(id_cols = cell.type.short, names_from = eRegulon, values_from = active) %>% 
+  dplyr::mutate(across(everything(), ~ tidyr::replace_na(.x, 0))) %>% 
+  dplyr::filter(cell.type.short %in% c("GlyT", "JZTP", "STGC", "SpT", "LaTP", "SynTI", "SynTII")) %>%
+  column_to_rownames("cell.type.short") %>%
+  dplyr::select(where(~ sum(.x) > 0))
+
+## Providing a custom order to rows
+order <- colSums(test) %>% sort(decreasing = T) %>% names() # coarse order to be refined below
+order <- c("Ahctf1", "Nr6a1", "Gata3", "Tfap2c", "Klf13", "Tcf12", "Pparg", "Arntl", "Mxi1", "Gata2", "Nr2f2", "Rora", "Grhl2", "Elk3", "Etv6", "Tead1", "Plagl1", "Ets2", "Irf2", "Tcf4", "Prdm1", "Nfib", "Cdx2", "Ascl2", "Ebf2", "E2f3", "Pbx3", "Max", "Ikzf2", "Rxra", "Bach2", "Smad3", "Cebpb", "Irf3", "Nfat5", "Npas2", "Dlx3", "Pax8", "Gcm1", "Trp63")
+
+## Sanity check
+answer <- all(colnames(test) %in% order)
+answer2 <- length(colnames(test)) == length((order))
+if (answer == FALSE | answer2 == FALSE) {
+  stop("ERROR: check the labels again")
+} else {print("All good. Proceeding.")}
+
+## Reordering
+test <- test[,order]
+
+# 5. Plot heatmap
+png("Visuals/a_horizontal_Heatmap_Median.png", height = 1000, width = 2400, res = 300)
+par(xpd=TRUE)
+  pheatmap(mat = test %>% as.matrix(),
+  scale = "none",
+  breaks = c(0, 0.5, 1),
+  legend = TRUE,
+  legend_breaks = c(0.25, 0.75),
+  legend_labels = c("Inactive", "Active"),
+  name = " ",
+  fontsize_row = 10,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  color = c("#E3D3B3", "#006400"), 
+  clustering_distance_rows = "binary", 
+  clustering_distance_cols = "binary",
+  clustering_method = "ward.D2",
+  border_color = "black",
+  angle_col = "90")
+dev.off()
+
+# 5. Plot heatmap
+pdf("Visuals/a_horizontal_Heatmap_Median.pdf", height = 10, width = 24)
+par(xpd=TRUE)
+  pheatmap(mat = test %>% as.matrix(),
+  scale = "none",
+  breaks = c(0, 0.5, 1),
+  legend = TRUE,
+  legend_breaks = c(0.25, 0.75),
+  legend_labels = c("Inactive", "Active"),
+  name = " ",
+  fontsize_row = 20,
+  fontsize_col = 20,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  color = c("#E3D3B3", "#006400"), 
+  clustering_distance_rows = "binary", 
+  clustering_distance_cols = "binary",
+  clustering_method = "ward.D2",
+  border_color = "black",
+  angle_col = "90")
+dev.off()
+
+## Concluding 
+#rm(list = ls())
+```
+## Figure 5b_1: Marker enrichment (SynTI)
+```{r}
+## Defining variables
+logFC_cut <- 1
+adjp_cut <- 0.001
+cell_type_of_interest <- "SynTI"
+triplet_rank_perc_cutoff <- 0.5
+active_regulons <- c("Ahctf1", "Nr6a1", "Klf13", "Mxi1", "Tead1", "Plagl1", "Cebpb", "Irf3", "Nfat5", "Npas2", "Dlx3", "Pax8")
+
+## Loading relevant files
+seurat_obj <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Atlases/Complete/MouseCompleteAtlas_FinalVersion_26thMay2026.rds")
+eReg_raw <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/eRegulon_direct.tsv", sep = "\t") 
+auc_binary <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/BinarizedMtx_AUCBinarize_MedianPerCellType.csv", check.names = FALSE) # Verified - only +/+ regulons present
+markers <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/MarkerLists/Complete/MouseCompleteAtlas_ByCellType_MinPct0.15_MinDiffPct0.15_MinLogFC0.5_PosOnly_13thAug2026.txt")
+
+# 2. HELPER: RNA VALIDATION
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# Filters TFs to only those expressed above a certain threshold
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# 3. CORE PROCESSING LOGIC
+rna_valid <- get_expressed_tfs(seurat_obj)
+rna_valid$gene <- sub("^[^-]+-", "", rna_valid$gene)
+cell_type_expr_genes <- rna_valid %>%
+  dplyr::filter(cell_type %in% cell_type_of_interest) %>%
+  pull(gene)
+
+## Filtering markers
+markers$gene <- sub("^[^-]+-", "", markers$gene)
+markers <- markers %>% 
+  dplyr::filter(avg_log2FC > logFC_cut) %>% 
+  dplyr::filter(p_val_adj < adjp_cut) %>% 
+  group_by(cluster) %>%
+  dplyr::arrange(desc(avg_log2FC), .by_group = T)
+cell_type_markers <- markers %>% 
+  dplyr::filter(cluster == cell_type_of_interest) %>%
+  pull(gene) %>%
+  unique()
+
+## Filtering the regulons to targets expressed in the cell type of interest and adjusting the regions file
+region_data <- eReg_raw %>%
+  dplyr::mutate(triplet_rank_perc = 1 - percent_rank(triplet_rank)) %>%
+  dplyr::filter(triplet_rank_perc > triplet_rank_perc_cutoff) %>%
+  dplyr::filter(TF %in% active_regulons) %>%
+  dplyr::filter(Gene %in% cell_type_expr_genes) %>%
+  dplyr::select(TF, Gene, triplet_rank_perc) %>% 
+  dplyr::group_by(TF, Gene) %>% 
+  dplyr::arrange(desc(triplet_rank_perc), .by_group = T) %>%
+  dplyr::slice_max(order_by = triplet_rank_perc, n = 1, with_ties = FALSE)
+
+## Adding marker/no marker annotation
+region_data <- region_data %>%
+  dplyr::mutate(Marker = case_when(Gene %in% cell_type_markers ~ "Marker",
+                                   .default = "Non-marker"))
+
+## Counting marker/non-marker per regulon
+regulon_frac <- region_data %>%
+  dplyr::group_by(TF, Marker) %>%
+  dplyr::summarise(n = n(), .groups = "drop") %>%
+  dplyr::group_by(TF) %>%
+  dplyr::mutate(frac = n / sum(n))
+
+## Reordering the regulons by fraction of markers and plotting
+level_order <- regulon_frac %>%
+  dplyr::filter(Marker == "Marker") %>%
+  dplyr::arrange(desc(frac)) %>% 
+  pull(TF)
+
+## Sanity check in case there is a regulon which does not have any markers at all
+check <- length(level_order) == length(unique(regulon_frac$TF))
+if (check == FALSE) {
+  missing_level <- active_regulons[!(active_regulons %in% level_order)]
+  level_order <- append(x = level_order, values = missing_level)
+  print(paste("Level", missing_level, "appended to the ordering vector"))
+}
+
+## Refactorizing and adding TF classification
+regulon_frac$TF <- factor(regulon_frac$TF, levels = level_order)
+regulon_frac$Marker <- factor(regulon_frac$Marker, levels = c("Non-marker", "Marker"))
+regulon_frac <- regulon_frac %>%
+  dplyr::mutate(Category = case_when(TF %in% c("Ahctf1", "Nr6a1", "Klf13", "Mxi1") ~ "Shared",
+                                         TF %in% c("Tead1", "Plagl1") ~ "Syncytiotrophoblast-specific", 
+                                         TF %in% c("Cebpb", "Irf3", "Nfat5", "Npas2", "Dlx3", "Pax8") ~ "SynTI-specific")) %>%
+  ungroup()
+
+## Specifying color and re-adjusting the elvels
+cols <- c("Shared"  = "#6d6e71",
+          "Syncytiotrophoblast-specific" = "grey10",
+          "SynTI-specific" = "#f7941d")
+
+regulon_frac <- regulon_frac %>%
+  dplyr::mutate(TF_col = paste0("<span style='color:", cols[Category], "'>", TF, "</span>"))
+tf_col_levels <- regulon_frac %>%
+  distinct(TF, TF_col) %>%
+  dplyr::arrange(match(TF, level_order)) %>%
+  pull(TF_col)
+
+regulon_frac$TF_col <- factor(regulon_frac$TF_col,
+                              levels = tf_col_levels)
+
+p1 <- ggplot(regulon_frac,
+       aes(x = TF_col, y = frac, fill = Marker)) +
+  geom_col(width = 0.8) +
+labs(title = cell_type_of_interest,
+    fill = "Marker"
+  ) + 
+  theme_classic() +
+  theme(legend.position = "none",
+        legend.text = element_text(size = 20, face = "bold"),
+        legend.key.size = unit(1, "cm"),
+        legend.title = element_blank(),
+        plot.title = element_blank(),
+        axis.text.x = ggtext::element_markdown(angle = 45, size = 20, vjust = 1, hjust = 1, face = "bold"),
+        axis.text.y = element_text(size = 20, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 20, face = "bold", colour = "black")) +
+  scale_fill_manual(values = c("Marker" = "#006400",
+                               "Non-marker" = "#E3D3B3")) + 
+  ylab("Fraction of regulon targets")
+
+ggsave(filename = paste0("Visuals/b_GRN_MarkerActivity_", cell_type_of_interest, ".png"), plot = p1, width = 9, height = 9)
+ggsave(filename = paste0("Visuals/b_GRN_MarkerActivity_", cell_type_of_interest, ".pdf"), plot = p1, width = 9, height = 9)
+
+
+## Concluding 
+rm(list = setdiff(ls(), "seurat_obj"))
+```
+## Figure 5b_2: Marker enrichment (SynTII)
+```{r}
+## Defining variables
+logFC_cut <- 1
+adjp_cut <- 0.001
+cell_type_of_interest <- "SynTII"
+triplet_rank_perc_cutoff <- 0.5
+active_regulons <- c("Ahctf1", "Nr6a1", "Gata3", "Klf13", "Mxi1", "Gata2", "Tead1", "Plagl1", "Gcm1", "Trp63")
+
+## Loading relevant files
+seurat_obj <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Atlases/Complete/MouseCompleteAtlas_FinalVersion_26thMay2026.rds")
+eReg_raw <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/eRegulon_direct.tsv", sep = "\t") 
+auc_binary <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/BinarizedMtx_AUCBinarize_MedianPerCellType.csv", check.names = FALSE) # Verified - only +/+ regulons present
+markers <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/MarkerLists/Complete/MouseCompleteAtlas_ByCellType_MinPct0.15_MinDiffPct0.15_MinLogFC0.5_PosOnly_13thAug2026.txt")
+
+# 2. HELPER: RNA VALIDATION
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# Filters TFs to only those expressed above a certain threshold
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# 3. CORE PROCESSING LOGIC
+rna_valid <- get_expressed_tfs(seurat_obj)
+rna_valid$gene <- sub("^[^-]+-", "", rna_valid$gene)
+cell_type_expr_genes <- rna_valid %>%
+  dplyr::filter(cell_type %in% cell_type_of_interest) %>%
+  pull(gene)
+
+## Filtering markers
+markers$gene <- sub("^[^-]+-", "", markers$gene)
+markers <- markers %>% 
+  dplyr::filter(avg_log2FC > logFC_cut) %>% 
+  dplyr::filter(p_val_adj < adjp_cut) %>% 
+  group_by(cluster) %>%
+  dplyr::arrange(desc(avg_log2FC), .by_group = T)
+cell_type_markers <- markers %>% 
+  dplyr::filter(cluster == cell_type_of_interest) %>%
+  pull(gene) %>%
+  unique()
+
+## Filtering the regulons to targets expressed in the cell type of interest and adjusting the regions file
+region_data <- eReg_raw %>%
+  dplyr::mutate(triplet_rank_perc = 1 - percent_rank(triplet_rank)) %>%
+  dplyr::filter(triplet_rank_perc > triplet_rank_perc_cutoff) %>%
+  dplyr::filter(TF %in% active_regulons) %>%
+  dplyr::filter(Gene %in% cell_type_expr_genes) %>%
+  dplyr::select(TF, Gene, triplet_rank_perc) %>% 
+  dplyr::group_by(TF, Gene) %>% 
+  dplyr::arrange(desc(triplet_rank_perc), .by_group = T) %>%
+  dplyr::slice_max(order_by = triplet_rank_perc, n = 1, with_ties = FALSE)
+
+## Adding marker/no marker annotation
+region_data <- region_data %>%
+  dplyr::mutate(Marker = case_when(Gene %in% cell_type_markers ~ "Marker",
+                                   .default = "Non-marker"))
+
+## Counting marker/non-marker per regulon
+regulon_frac <- region_data %>%
+  dplyr::group_by(TF, Marker) %>%
+  dplyr::summarise(n = n(), .groups = "drop") %>%
+  dplyr::group_by(TF) %>%
+  dplyr::mutate(frac = n / sum(n))
+
+## Reordering the regulons by fraction of markers and plotting
+level_order <- regulon_frac %>%
+  dplyr::filter(Marker == "Marker") %>%
+  dplyr::arrange(desc(frac)) %>% 
+  pull(TF)
+
+## Sanity check in case there is a regulon which does not have any markers at all
+check <- length(level_order) == length(unique(regulon_frac$TF))
+if (check == FALSE) {
+  missing_level <- active_regulons[!(active_regulons %in% level_order)]
+  level_order <- append(x = level_order, values = missing_level)
+  print(paste("Level", missing_level, "appended to the ordering vector"))
+}
+
+## Refactorizing and adding TF classification
+regulon_frac$TF <- factor(regulon_frac$TF, levels = level_order)
+regulon_frac$Marker <- factor(regulon_frac$Marker, levels = c("Non-marker", "Marker"))
+regulon_frac <- regulon_frac %>%
+  dplyr::mutate(Category = case_when(TF %in% c("Ahctf1", "Nr6a1", "Klf13", "Mxi1", "Gata2", "Gata3") ~ "Shared",
+                                         TF %in% c("Tead1", "Plagl1") ~ "Syncytiotrophoblast-specific", 
+                                         TF %in% c("Gcm1", "Trp63") ~ "SynTI-specific")) %>%
+  ungroup()
+
+## Specifying color and re-adjusting the elvels
+cols <- c("Shared"  = "#6d6e71",
+          "Syncytiotrophoblast-specific" = "grey10",
+          "SynTI-specific" = "#f7941d")
+
+regulon_frac <- regulon_frac %>%
+  dplyr::mutate(TF_col = paste0("<span style='color:", cols[Category], "'>", TF, "</span>"))
+tf_col_levels <- regulon_frac %>%
+  distinct(TF, TF_col) %>%
+  dplyr::arrange(match(TF, level_order)) %>%
+  pull(TF_col)
+
+regulon_frac$TF_col <- factor(regulon_frac$TF_col,
+                              levels = tf_col_levels)
+
+p1 <- ggplot(regulon_frac,
+       aes(x = TF_col, y = frac, fill = Marker)) +
+  geom_col(width = 0.8) +
+labs(title = cell_type_of_interest,
+    fill = "Marker"
+  ) + 
+  theme_classic() +
+  theme(legend.position = "none",
+        legend.text = element_text(size = 20, face = "bold"),
+        legend.key.size = unit(1, "cm"),
+        legend.title = element_blank(),
+        plot.title = element_blank(),
+        axis.text.x = ggtext::element_markdown(angle = 45, size = 20, vjust = 1, hjust = 1, face = "bold"),
+        axis.text.y = element_text(size = 20, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 20, face = "bold", colour = "black")) +
+  scale_fill_manual(values = c("Marker" = "#006400",
+                               "Non-marker" = "#E3D3B3")) + 
+  ylab("Fraction of regulon targets")
+
+ggsave(filename = paste0("Visuals/b_GRN_MarkerActivity_", cell_type_of_interest, ".png"), plot = p1, width = 9, height = 9)
+ggsave(filename = paste0("Visuals/b_GRN_MarkerActivity_", cell_type_of_interest, ".pdf"), plot = p1, width = 9, height = 9)
+
+
+## Concluding 
+rm(list = setdiff(ls(), "seurat_obj"))
+```
+## Figure 5b_3: Marker enrichment (S-TGC)
+```{r}
+## Defining variables
+logFC_cut <- 1
+adjp_cut <- 0.001
+cell_type_of_interest <- "STGC"
+triplet_rank_perc_cutoff <- 0.5
+active_regulons <- c("Ahctf1", "Nr6a1", "Gata3", "Tfap2c", "Klf13", "Tcf12", "Pparg", "Mxi1", "Nr2f2", "Gata2", "Grhl2", "Max", "Ikzf2", "Rxra", "Bach2")
+
+## Loading relevant files
+seurat_obj <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Atlases/Complete/MouseCompleteAtlas_FinalVersion_26thMay2026.rds")
+eReg_raw <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/eRegulon_direct.tsv", sep = "\t") 
+auc_binary <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/BinarizedMtx_AUCBinarize_MedianPerCellType.csv", check.names = FALSE) # Verified - only +/+ regulons present
+markers <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/MarkerLists/Complete/MouseCompleteAtlas_ByCellType_MinPct0.15_MinDiffPct0.15_MinLogFC0.5_PosOnly_13thAug2026.txt")
+
+# 2. HELPER: RNA VALIDATION
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# Filters TFs to only those expressed above a certain threshold
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# 3. CORE PROCESSING LOGIC
+rna_valid <- get_expressed_tfs(seurat_obj)
+rna_valid$gene <- sub("^[^-]+-", "", rna_valid$gene)
+cell_type_expr_genes <- rna_valid %>%
+  dplyr::filter(cell_type %in% cell_type_of_interest) %>%
+  pull(gene)
+
+## Filtering markers
+markers$gene <- sub("^[^-]+-", "", markers$gene)
+markers <- markers %>% 
+  dplyr::filter(avg_log2FC > logFC_cut) %>% 
+  dplyr::filter(p_val_adj < adjp_cut) %>% 
+  group_by(cluster) %>%
+  dplyr::arrange(desc(avg_log2FC), .by_group = T)
+cell_type_markers <- markers %>% 
+  dplyr::filter(cluster == cell_type_of_interest) %>%
+  pull(gene) %>%
+  unique()
+
+## Filtering the regulons to targets expressed in the cell type of interest and adjusting the regions file
+region_data <- eReg_raw %>%
+  dplyr::mutate(triplet_rank_perc = 1 - percent_rank(triplet_rank)) %>%
+  dplyr::filter(triplet_rank_perc > triplet_rank_perc_cutoff) %>%
+  dplyr::filter(TF %in% active_regulons) %>%
+  dplyr::filter(Gene %in% cell_type_expr_genes) %>%
+  dplyr::select(TF, Gene, triplet_rank_perc) %>% 
+  dplyr::group_by(TF, Gene) %>% 
+  dplyr::arrange(desc(triplet_rank_perc), .by_group = T) %>%
+  dplyr::slice_max(order_by = triplet_rank_perc, n = 1, with_ties = FALSE)
+
+## Adding marker/no marker annotation
+region_data <- region_data %>%
+  dplyr::mutate(Marker = case_when(Gene %in% cell_type_markers ~ "Marker",
+                                   .default = "Non-marker"))
+
+## Counting marker/non-marker per regulon
+regulon_frac <- region_data %>%
+  dplyr::group_by(TF, Marker) %>%
+  dplyr::summarise(n = n(), .groups = "drop") %>%
+  dplyr::group_by(TF) %>%
+  dplyr::mutate(frac = n / sum(n))
+
+## Reordering the regulons by fraction of markers and plotting
+level_order <- regulon_frac %>%
+  dplyr::filter(Marker == "Marker") %>%
+  dplyr::arrange(desc(frac)) %>% 
+  pull(TF)
+
+## Sanity check in case there is a regulon which does not have any markers at all
+check <- length(level_order) == length(unique(regulon_frac$TF))
+if (check == FALSE) {
+  missing_level <- active_regulons[!(active_regulons %in% level_order)]
+  level_order <- append(x = level_order, values = missing_level)
+  print(paste("Level", missing_level, "appended to the ordering vector"))
+}
+
+## Refactorizing and adding TF classification
+regulon_frac$TF <- factor(regulon_frac$TF, levels = level_order)
+regulon_frac$Marker <- factor(regulon_frac$Marker, levels = c("Non-marker", "Marker"))
+regulon_frac <- regulon_frac %>%
+  dplyr::mutate(Category = case_when(TF %in% c("Ahctf1", "Nr6a1", "Gata3", "Tfap2c", "Klf13", "Tcf12", "Pparg", "Mxi1", "Nr2f2", "Gata2", "Grhl2") ~ "Shared",
+                                         TF %in% c("Max", "Ikzf2", "Rxra", "Bach2") ~ "STGC-specific")) %>%
+  ungroup()
+
+## Specifying color and re-adjusting the elvels
+cols <- c("Shared"  = "#6d6e71",
+          "STGC-specific" = "#f7941d")
+
+regulon_frac <- regulon_frac %>%
+  dplyr::mutate(TF_col = paste0("<span style='color:", cols[Category], "'>", TF, "</span>"))
+tf_col_levels <- regulon_frac %>%
+  distinct(TF, TF_col) %>%
+  dplyr::arrange(match(TF, level_order)) %>%
+  pull(TF_col)
+
+regulon_frac$TF_col <- factor(regulon_frac$TF_col,
+                              levels = tf_col_levels)
+
+p1 <- ggplot(regulon_frac,
+       aes(x = TF_col, y = frac, fill = Marker)) +
+  geom_col(width = 0.8) +
+labs(title = cell_type_of_interest,
+    fill = "Marker"
+  ) + 
+  theme_classic() +
+  theme(legend.position = "none",
+        legend.text = element_text(size = 20, face = "bold"),
+        legend.key.size = unit(1, "cm"),
+        legend.title = element_blank(),
+        plot.title = element_blank(),
+        axis.text.x = ggtext::element_markdown(angle = 45, size = 20, vjust = 1, hjust = 1, face = "bold"),
+        axis.text.y = element_text(size = 20, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 20, face = "bold", colour = "black")) +
+  scale_fill_manual(values = c("Marker" = "#006400",
+                               "Non-marker" = "#E3D3B3")) + 
+  ylab("Fraction of regulon targets")
+
+ggsave(filename = paste0("Visuals/b_GRN_MarkerActivity_", cell_type_of_interest, ".png"), plot = p1, width = 9, height = 9)
+ggsave(filename = paste0("Visuals/b_GRN_MarkerActivity_", cell_type_of_interest, ".pdf"), plot = p1, width = 9, height = 9)
+
+
+## Concluding 
+rm(list = setdiff(ls(), "seurat_obj"))
+```
+
+
+
+## Figure 5b_4: Marker enrichment (SpT)
+```{r}
+## Defining variables
+logFC_cut <- 1
+adjp_cut <- 0.001
+cell_type_of_interest <- "SpT"
+triplet_rank_perc_cutoff <- 0.5
+active_regulons <- c("Ahctf1", "Nr6a1", "Gata3", "Tfap2c", "Tcf12", "Pparg", "Arntl", "Mxi1", "Rora", "Grhl2", "Smad3")
+
+## Loading relevant files
+#seurat_obj <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Atlases/Complete/MouseCompleteAtlas_FinalVersion_26thMay2026.rds")
+eReg_raw <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/eRegulon_direct.tsv", sep = "\t") 
+auc_binary <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/BinarizedMtx_AUCBinarize_MedianPerCellType.csv", check.names = FALSE) # Verified - only +/+ regulons present
+markers <- read.table(file = "~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/MarkerLists/Complete/MouseCompleteAtlas_ByCellType_MinPct0.15_MinDiffPct0.15_MinLogFC0.5_PosOnly_13thAug2026.txt")
+
+# 2. HELPER: RNA VALIDATION
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# Filters TFs to only those expressed above a certain threshold
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# 3. CORE PROCESSING LOGIC
+rna_valid <- get_expressed_tfs(seurat_obj)
+rna_valid$gene <- sub("^[^-]+-", "", rna_valid$gene)
+cell_type_expr_genes <- rna_valid %>%
+  dplyr::filter(cell_type %in% cell_type_of_interest) %>%
+  pull(gene)
+
+## Filtering markers
+markers$gene <- sub("^[^-]+-", "", markers$gene)
+markers <- markers %>% 
+  dplyr::filter(avg_log2FC > logFC_cut) %>% 
+  dplyr::filter(p_val_adj < adjp_cut) %>% 
+  group_by(cluster) %>%
+  dplyr::arrange(desc(avg_log2FC), .by_group = T)
+cell_type_markers <- markers %>% 
+  dplyr::filter(cluster == cell_type_of_interest) %>%
+  pull(gene) %>%
+  unique()
+
+## Filtering the regulons to targets expressed in the cell type of interest and adjusting the regions file
+region_data <- eReg_raw %>%
+  dplyr::mutate(triplet_rank_perc = 1 - percent_rank(triplet_rank)) %>%
+  dplyr::filter(triplet_rank_perc > triplet_rank_perc_cutoff) %>%
+  dplyr::filter(TF %in% active_regulons) %>%
+  dplyr::filter(Gene %in% cell_type_expr_genes) %>%
+  dplyr::select(TF, Gene, triplet_rank_perc) %>% 
+  dplyr::group_by(TF, Gene) %>% 
+  dplyr::arrange(desc(triplet_rank_perc), .by_group = T) %>%
+  dplyr::slice_max(order_by = triplet_rank_perc, n = 1, with_ties = FALSE)
+
+## Adding marker/no marker annotation
+region_data <- region_data %>%
+  dplyr::mutate(Marker = case_when(Gene %in% cell_type_markers ~ "Marker",
+                                   .default = "Non-marker"))
+
+## Counting marker/non-marker per regulon
+regulon_frac <- region_data %>%
+  dplyr::group_by(TF, Marker) %>%
+  dplyr::summarise(n = n(), .groups = "drop") %>%
+  dplyr::group_by(TF) %>%
+  dplyr::mutate(frac = n / sum(n))
+
+## Reordering the regulons by fraction of markers and plotting
+level_order <- regulon_frac %>%
+  dplyr::filter(Marker == "Marker") %>%
+  dplyr::arrange(desc(frac)) %>% 
+  pull(TF)
+
+## Sanity check in case there is a regulon which does not have any markers at all
+check <- length(level_order) == length(unique(regulon_frac$TF))
+if (check == FALSE) {
+  missing_level <- active_regulons[!(active_regulons %in% level_order)]
+  level_order <- append(x = level_order, values = missing_level)
+  print(paste("Level", missing_level, "appended to the ordering vector"))
+}
+
+## Refactorizing and adding TF classification
+regulon_frac$TF <- factor(regulon_frac$TF, levels = level_order)
+regulon_frac$Marker <- factor(regulon_frac$Marker, levels = c("Non-marker", "Marker"))
+regulon_frac <- regulon_frac %>%
+  dplyr::mutate(Category = case_when(TF %in% c("Ahctf1", "Nr6a1", "Gata3", "Tfap2c", "Tcf12", "Pparg", "Arntl", "Mxi1", "Rora", "Grhl2") ~ "Shared",
+                                         TF %in% c("Smad3") ~ "SpT-specific")) %>%
+  ungroup()
+
+## Specifying color and re-adjusting the elvels
+cols <- c("Shared"  = "#6d6e71",
+          "SpT-specific" = "#f7941d")
+
+regulon_frac <- regulon_frac %>%
+  dplyr::mutate(TF_col = paste0("<span style='color:", cols[Category], "'>", TF, "</span>"))
+tf_col_levels <- regulon_frac %>%
+  distinct(TF, TF_col) %>%
+  dplyr::arrange(match(TF, level_order)) %>%
+  pull(TF_col)
+
+regulon_frac$TF_col <- factor(regulon_frac$TF_col,
+                              levels = tf_col_levels)
+
+p1 <- ggplot(regulon_frac,
+       aes(x = TF_col, y = frac, fill = Marker)) +
+  geom_col(width = 0.8) +
+labs(title = cell_type_of_interest,
+    fill = "Marker"
+  ) + 
+  theme_classic() +
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 20, face = "bold"),
+        legend.key.size = unit(1, "cm"),
+        legend.title = element_blank(),
+        plot.title = element_blank(),
+        axis.text.x = ggtext::element_markdown(angle = 45, size = 20, vjust = 1, hjust = 1, face = "bold"),
+        axis.text.y = element_text(size = 20, colour = "black"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 20, face = "bold", colour = "black")) +
+  scale_fill_manual(values = c("Marker" = "#006400",
+                               "Non-marker" = "#E3D3B3")) + 
+  ylab("Fraction of regulon targets")
+
+ggsave(filename = paste0("Visuals/b_GRN_MarkerActivity_", cell_type_of_interest, ".png"), plot = p1, width = 9, height = 9)
+ggsave(filename = paste0("Visuals/b_GRN_MarkerActivity_", cell_type_of_interest, ".pdf"), plot = p1, width = 9, height = 9)
+
+## Emptying the environment
+rm(list = ls())
+```
+
+
+
+## Figure 5c: Spongiotrophoblast network with labelled PSG targets
+```{r}
+## Defining variables
+active_regulons <- c("Ahctf1", "Nr6a1", "Gata3", "Tfap2c", "Tcf12", "Pparg", "Arntl", "Mxi1", "Rora", "Grhl2", "Smad3")
+celltype_specific_tfs <- "Smad3"
+active_regulons_formatted <- paste0(active_regulons, "_direct_+/+")
+triplet_rank_perc_cutoff <- 0.5
+cell_type_of_interest <- "SpT"
+
+## Loading relevant files
+seurat_obj <- readRDS("~/Scratch_MF/2026_Falis_et_al/ReferenceFiles/Atlases/Complete/MouseCompleteAtlas_FinalVersion_26thMay2026.rds")
+eReg_raw <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/eRegulon_direct.tsv", sep = "\t")
+
+# 2. HELPER: RNA VALIDATION
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# Filters TFs to only those expressed above a certain threshold
+get_expressed_tfs <- function(seurat_obj, threshold = 0.5) {
+  avg_exp <- AverageExpression(seurat_obj, group.by = "cell.type.short", slot = "data")$RNA
+  as.data.frame(avg_exp) %>%
+    rownames_to_column("gene") %>%
+    pivot_longer(-gene, names_to = "cell_type", values_to = "expression") %>%
+    filter(expression > threshold) %>%
+    select(cell_type, gene, expression)
+}
+
+# 3. CORE PROCESSING LOGIC
+rna_valid <- get_expressed_tfs(seurat_obj)
+rna_valid$gene <- sub("^[^-]+-", "", rna_valid$gene)
+expr_genes <- rna_valid %>% dplyr::filter(cell_type == cell_type_of_interest) %>% pull(gene)
+
+## Subsetting the regulon file to retain only the regulons of interest
+to_plot <- eReg_raw %>%
+  dplyr::mutate(triplet_rank_perc = 1 - percent_rank(triplet_rank)) %>%
+  dplyr::filter(eRegulon_name %in% active_regulons_formatted) %>%
+  dplyr::filter(Gene %in% expr_genes) %>%
+  dplyr::filter(triplet_rank_perc > triplet_rank_perc_cutoff) %>%
+  dplyr::select(TF, Gene, triplet_rank_perc) %>% 
+  dplyr::group_by(TF, Gene) %>% 
+  dplyr::arrange(desc(triplet_rank_perc), .by_group = T) %>%
+  dplyr::slice_max(order_by = triplet_rank_perc, n = 1, with_ties = FALSE)
+
+## Adding allocation to expanded gene families
+cathepsins <- c("Cts3",
+  "Cts6",
+  "Cts7",
+  "Cts7-ps",
+  "Cts8",
+  "Cts8-ps",
+  "Ctsa",
+  "Ctsb",
+  "Ctsc",
+  "Ctsd",
+  "Ctse",
+  "Ctsf",
+  "Ctsg",
+  "Ctsh",
+  "Ctsj",
+  "Ctsk",
+  "Ctsl",
+  "Ctsm",
+  "Ctsm-ps",
+  "Ctso",
+  "Ctsq",
+  "Ctsr",
+  "Ctss",
+  "Ctsw",
+  "Ctsz",
+  "Tpbpa",
+  "Tpbpb")
+
+prolactins <- c(
+  "Prl",
+  "Prl2a1",
+  "Prl2b1",
+  "Prl2c1",
+  "Prl2c2",
+  "Prl2c3",
+  "Prl2c5",
+  "Prl3a1",
+  "Prl3b1",
+  "Prl3c1",
+  "Prl3d1",
+  "Prl3d2",
+  "Prl3d3",
+  "Prl4a1",
+  "Prl5a1",
+  "Prl6a1",
+  "Prl7a1",
+  "Prl7a2",
+  "Prl7b1",
+  "Prl7c1",
+  "Prl7d1",
+  "Prl8a1",
+  "Prl8a2",
+  "Prl8a6",
+  "Prl8a8",
+  "Prl8a9")
+psg_ceacam <- c(
+  "Ceacam-ps1",
+  "Ceacam1",
+  "Ceacam2",
+  "Ceacam3",
+  "Ceacam5",
+  "Ceacam9",
+  "Ceacam10",
+  "Ceacam11",
+  "Ceacam12",
+  "Ceacam13",
+  "Ceacam14",
+  "Ceacam15",
+  "Ceacam16",
+  "Ceacam18",
+  "Ceacam19",
+  "Ceacam20",
+  "Psg-ps1",
+  "Psg16",
+  "Psg17",
+  "Psg18",
+  "Psg19",
+  "Psg20",
+  "Psg21",
+  "Psg22",
+  "Psg23",
+  "Psg25",
+  "Psg26",
+  "Psg27",
+  "Psg28",
+  "Psg29",
+  "Gm5155")
+
+to_plot <- to_plot %>%
+  dplyr::mutate(highlight = case_when(Gene %in% active_regulons ~ "TF",
+                                      Gene %in% cathepsins ~ "Cathepsin",
+                                      Gene %in% prolactins ~ "Prolactin",
+                                      Gene %in% psg_ceacam ~ "CEA",
+                                      .default = "Other")) %>%
+  dplyr::filter(highlight %in% c("TF", "CEA"))
+
+## Node table: ALL TFs in active_regulons are kept, even if they have no edges
+tf_nodes <- tibble(name = active_regulons,
+                   node_type   = "TF",
+                   node_class  = "TF",
+                   tf_category = if_else(active_regulons %in% celltype_specific_tfs,
+                                         "Cell-type specific",
+                                         "Shared"))
+
+target_nodes <- to_plot %>%
+  dplyr::distinct(name = Gene, node_class = highlight) %>%
+  dplyr::filter(!name %in% active_regulons) %>%
+  dplyr::mutate(node_type   = "Target",
+                tf_category = NA_character_)
+
+nodes <- bind_rows(tf_nodes, target_nodes) %>%
+  dplyr::distinct(name, .keep_all = TRUE)
+
+
+graph <- tbl_graph(
+  nodes = nodes,
+  edges = to_plot %>%
+    select(from = TF,
+           to = Gene,
+           triplet_rank_perc),
+  directed = TRUE
+)
+
+node_info <- to_plot %>%
+  ungroup() %>%
+  select(Gene, highlight) %>%
+  distinct() %>%
+  rename(name = Gene)
+
+graph <- graph %>%
+  activate(nodes) %>%
+  left_join(node_info, by = "name") %>%
+  mutate(
+    allocation = case_when(
+      node_type == "TF" & name %in% celltype_specific_tfs ~ "Cell-type specific TF",
+      node_type == "TF" ~ "Shared TF",
+      highlight == "CEA" ~ "CEA Family",
+      TRUE ~ NA_character_
+    )
+  )
+
+p1 <- ggraph(graph, layout = "fr") +
+  geom_edge_link(
+  width = 1,
+  colour = "black",
+  alpha = 0.5,
+  end_cap = circle(2, "mm"),
+  arrow = arrow(
+    length = unit(2, "mm"),
+    type = "closed"
+  )
+) +
+  geom_node_point(
+    aes(colour = allocation,
+        shape = allocation),
+    size = 7
+  ) +
+  geom_node_text(
+    aes(label = ifelse(node_type == "Target", name, NA)),
+    repel = TRUE,
+    size = 6,
+    fontface = "plain",
+    force = 20,
+    max.overlaps = Inf,
+    point.padding = 0.5,
+    box.padding = 1) +
+  geom_node_text(
+    aes(label = ifelse(node_type == "TF", name, NA)),
+    repel = TRUE,
+    size = 8,
+    fontface = "bold",
+    force = 20,
+    max.overlaps = Inf,
+    point.padding = 0.5,
+    box.padding = 1) +
+  scale_colour_manual(
+    name = NULL,
+    values = c(
+      "Cell-type specific TF" = "#D55E00",
+      "Shared TF" = "black",
+      "CEA Family" = "#E69500"
+    )
+  ) +
+  scale_shape_manual(
+    name = NULL,
+    values = c(
+      "Cell-type specific TF" = 15,
+      "Shared TF" = 15,
+      "CEA Family" = 16
+    )
+  ) +
+  theme_graph() +
+  theme(
+    legend.position = "bottom",
+    legend.text = element_text(size = 20))
+
+ggsave(filename = "Visuals/c_GRN_SpT_ExpandedFamiliesHighlighted.png", plot = p1, height = 9, width = 12)
+ggsave(filename = "Visuals/c_GRN_SpT_ExpandedFamiliesHighlighted.pdf", plot = p1, height = 9, width = 12, device = cairo_pdf)
+
+## Concluding 
+rm(list = ls())
+```
+## Figure 5d: STGC network
+```{r}
+## Defining variables
+active_regulons <- c("Ahctf1", "Nr6a1", "Gata3", "Tfap2c", "Klf13", "Tcf12", "Pparg", "Mxi1", "Nr2f2", "Gata2", "Grhl2", "Max", "Ikzf2", "Rxra", "Bach2")
+active_regulons_formatted <- paste0(active_regulons, "_direct_+/+")
+triplet_rank_perc_cutoff <- 0.5
+
+## Loading relevant files
+eReg_raw <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/eRegulon_direct.tsv", sep = "\t") 
+
+## Subsetting the regulon file to retain only the regulons of interest
+to_plot <- eReg_raw %>%
+  dplyr::mutate(triplet_rank_perc = 1 - percent_rank(triplet_rank)) %>%
+  dplyr::filter(eRegulon_name %in% active_regulons_formatted) %>%
+  dplyr::filter(triplet_rank_perc > triplet_rank_perc_cutoff) %>%
+  dplyr::select(TF, Gene, triplet_rank_perc) %>% 
+  dplyr::group_by(TF, Gene) %>% 
+  dplyr::arrange(desc(triplet_rank_perc), .by_group = T) %>%
+  dplyr::slice_max(order_by = triplet_rank_perc, n = 1, with_ties = FALSE)
+
+## Plot connections between regulons
+to_plot <- to_plot %>%
+  dplyr::mutate(TF_highlight = case_when(TF %in% c("Ahctf1", "Nr6a1", "Gata3", "Tfap2c", "Klf13", "Tcf12", "Pparg", "Mxi1", "Nr2f2", "Gata2", "Grhl2") ~ "Shared",
+                                         TF %in% c("Max", "Ikzf2", "Rxra", "Bach2") ~ "STGC-specific")) %>%
+  ungroup()
+
+
+## Creating the table for network plotting. I explicitly include all TFs, even if they have no connections to other TFs
+node_info <- tibble(to_plot %>% 
+         dplyr::select(TF, TF_highlight) %>%
+         distinct() %>%
+         dplyr::mutate(node_type = "TF"))
+
+edges_df <- to_plot %>%
+  dplyr::filter(Gene %in% active_regulons) %>%
+  dplyr::select(from = TF,
+                to = Gene,
+                triplet_rank_perc)
+
+graph <- tbl_graph(nodes = node_info,
+                   edges = edges_df,
+                   directed = TRUE)
+
+## Plotting
+cols <- c("Shared"  = "#6d6e71",
+          "STGC-specific" = "#f7941d")
+
+p1 <- ggraph(graph, layout = "fr") +
+  geom_edge_link(
+  width = 0.8,
+  colour = "black",
+  alpha = 0.5,
+  end_cap = circle(4, "mm"),
+  arrow = arrow(
+    length = unit(4, "mm"),
+    type = "closed")) +
+  geom_node_point(aes(fill = TF_highlight),
+                  shape = 21,
+                  size = 10,
+                  colour = "black",
+                  stroke = 0.4) +
+  geom_node_text(aes(label = TF),
+                 repel = TRUE,
+                 fontface = "bold",
+                 size = 10,
+                 force = 20,
+                 max.overlaps = Inf,
+                 point.padding = 0.5,
+                 box.padding = 1) +
+  scale_fill_manual(values = cols) +
+  theme_graph() +
+  theme(legend.position = "bottom",
+        legend.title.position = "top",
+        legend.title = element_text(face = "bold", hjust = 0.5, size = 20),
+        legend.text = element_text(size = 23)) +
+  guides(edge_width = guide_legend(title = "Triplet Rank Percentile"),
+         fill = guide_legend(title = ""))
+
+ggsave(filename = "Visuals/d_STGCNetwork.png", plot = p1, width = 9, height = 12)
+ggsave(filename = "Visuals/d_STGCNetwork.pdf", plot = p1, width = 9, height = 12, device = cairo_pdf)
+
+## Emptying the environment
+rm(list = ls())
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Figure 5e: Syncytiotrophoblast I network
+```{r}
+## Defining variables
+active_regulons <- c("Ahctf1", "Nr6a1", "Klf13", "Mxi1", "Tead1", "Plagl1", "Cebpb", "Irf3", "Nfat5", "Npas2", "Dlx3", "Pax8")
+active_regulons_formatted <- paste0(active_regulons, "_direct_+/+")
+triplet_rank_perc_cutoff <- 0.5
+
+## Loading relevant files
+eReg_raw <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/eRegulon_direct.tsv", sep = "\t") 
+
+## Subsetting the regulon file to retain only the regulons of interest
+to_plot <- eReg_raw %>%
+  dplyr::mutate(triplet_rank_perc = 1 - percent_rank(triplet_rank)) %>%
+  dplyr::filter(eRegulon_name %in% active_regulons_formatted) %>%
+  dplyr::filter(triplet_rank_perc > triplet_rank_perc_cutoff) %>%
+  dplyr::select(TF, Gene, triplet_rank_perc) %>% 
+  dplyr::group_by(TF, Gene) %>% 
+  dplyr::arrange(desc(triplet_rank_perc), .by_group = T) %>%
+  dplyr::slice_max(order_by = triplet_rank_perc, n = 1, with_ties = FALSE)
+
+## Plot connections between regulons
+to_plot <- to_plot %>%
+  dplyr::mutate(TF_highlight = case_when(TF %in% c("Ahctf1", "Nr6a1", "Klf13", "Mxi1") ~ "Shared",
+                                         TF %in% c("Tead1", "Plagl1") ~ "Syncytiotrophoblast-specific", 
+                                         TF %in% c("Cebpb", "Irf3", "Nfat5", "Npas2", "Dlx3", "Pax8") ~ "SynTI-specific")) %>%
+  ungroup()
+
+
+## Creating the table for network plotting. I explicitly include all TFs, even if they have no connections to other TFs
+node_info <- tibble(to_plot %>% 
+         dplyr::select(TF, TF_highlight) %>%
+         distinct() %>%
+         dplyr::mutate(node_type = "TF"))
+
+edges_df <- to_plot %>%
+  dplyr::filter(Gene %in% active_regulons) %>%
+  dplyr::select(from = TF,
+                to = Gene,
+                triplet_rank_perc)
+
+graph <- tbl_graph(nodes = node_info,
+                   edges = edges_df,
+                   directed = TRUE)
+
+## Plotting
+cols <- c("Shared"  = "#6d6e71",
+          "Syncytiotrophoblast-specific" = "grey10",
+          "SynTI-specific" = "#f7941d")
+
+p1 <-  ggraph(graph, layout = "fr") +
+  geom_edge_link(
+  width = 0.8,
+  colour = "black",
+  alpha = 0.5,
+  end_cap = circle(4, "mm"),
+  arrow = arrow(
+    length = unit(4, "mm"),
+    type = "closed")) +
+  geom_node_point(aes(fill = TF_highlight),
+                  shape = 21,
+                  size = 10,
+                  colour = "black",
+                  stroke = 0.4) +
+  geom_node_text(aes(label = TF),
+                 repel = TRUE,
+                 fontface = "bold",
+                 size = 10,
+                 force = 20,
+                 max.overlaps = Inf,
+                 point.padding = 0.5,
+                 box.padding = 1) +
+  scale_fill_manual(values = cols) +
+  theme_graph() +
+  theme(legend.position = "bottom",
+        legend.title.position = "top",
+        legend.title = element_text(face = "bold", hjust = 0.5, size = 20),
+        legend.text = element_text(size = 23)) +
+  guides(edge_width = guide_legend(title = "Triplet Rank Percentile"),
+         fill = guide_legend(title = ""))
+
+ggsave(filename = "Visuals/e_SynTINetwork.png", plot = p1, width = 9, height = 12)
+ggsave(filename = "Visuals/e_SynTINetwork.pdf", plot = p1, width = 9, height = 12, device = cairo_pdf)
+
+## Emptying the environment
+rm(list = ls())
+```
+## Figure 5f: Syncytiotrophoblast II network
+```{r}
+## Defining variables
+active_regulons <- c("Ahctf1", "Nr6a1", "Gata3", "Klf13", "Mxi1", "Gata2", "Tead1", "Plagl1", "Gcm1", "Trp63")
+active_regulons_formatted <- paste0(active_regulons, "_direct_+/+")
+triplet_rank_perc_cutoff <- 0.5
+
+## Loading relevant files
+eReg_raw <- read.csv("~/Scratch_MF/ATAC/sc_Mm/scenic_complete_final_AddressingNaN/Data/scenicplus_output/eRegulon_direct.tsv", sep = "\t") 
+
+## Subsetting the regulon file to retain only the regulons of interest
+to_plot <- eReg_raw %>%
+  dplyr::mutate(triplet_rank_perc = 1 - percent_rank(triplet_rank)) %>%
+  dplyr::filter(eRegulon_name %in% active_regulons_formatted) %>%
+  dplyr::filter(triplet_rank_perc > triplet_rank_perc_cutoff) %>%
+  dplyr::select(TF, Gene, triplet_rank_perc) %>% 
+  dplyr::group_by(TF, Gene) %>% 
+  dplyr::arrange(desc(triplet_rank_perc), .by_group = T) %>%
+  dplyr::slice_max(order_by = triplet_rank_perc, n = 1, with_ties = FALSE)
+
+## Plot connections between regulons
+to_plot <- to_plot %>%
+  dplyr::mutate(TF_highlight = case_when(TF %in% c("Ahctf1", "Nr6a1", "Gata3", "Klf13", "Mxi1", "Gata2") ~ "Shared",
+                                         TF %in% c("Tead1", "Plagl1") ~ "Syncytiotrophoblast-specific", 
+                                         TF %in% c("Gcm1", "Trp63") ~ "SynTII-specific")) %>%
+  ungroup()
+
+
+## Creating the table for network plotting. I explicitly include all TFs, even if they have no connections to other TFs
+node_info <- tibble(to_plot %>% 
+         dplyr::select(TF, TF_highlight) %>%
+         distinct() %>%
+         dplyr::mutate(node_type = "TF"))
+
+edges_df <- to_plot %>%
+  dplyr::filter(Gene %in% active_regulons) %>%
+  dplyr::select(from = TF,
+                to = Gene,
+                triplet_rank_perc)
+
+graph <- tbl_graph(nodes = node_info,
+                   edges = edges_df,
+                   directed = TRUE)
+
+## Plotting
+cols <- c("Shared"  = "#6d6e71",
+          "Syncytiotrophoblast-specific" = "grey10",
+          "SynTII-specific" = "#f7941d")
+
+p1 <- ggraph(graph, layout = "fr") +
+  geom_edge_link(
+  width = 0.8,
+  colour = "black",
+  alpha = 0.5,
+  end_cap = circle(4, "mm"),
+  arrow = arrow(
+    length = unit(4, "mm"),
+    type = "closed")) +
+  geom_node_point(aes(fill = TF_highlight),
+                  shape = 21,
+                  size = 10,
+                  colour = "black",
+                  stroke = 0.4) +
+  geom_node_text(aes(label = TF),
+                 repel = TRUE,
+                 fontface = "bold",
+                 size = 10,
+                 force = 20,
+                 max.overlaps = Inf,
+                 point.padding = 0.5,
+                 box.padding = 1) +
+  scale_fill_manual(values = cols) +
+  theme_graph() +
+  theme(legend.position = "bottom",
+        legend.title.position = "top",
+        legend.title = element_text(face = "bold", hjust = 0.5, size = 20),
+        legend.text = element_text(size = 23)) +
+  guides(edge_width = guide_legend(title = "Triplet Rank Percentile"),
+         fill = guide_legend(title = ""))
+
+ggsave(filename = "./Visuals/f_SynTIINetwork.png", plot = p1, width = 9, height = 12)
+ggsave(filename = "./Visuals/f_SynTIINetwork.pdf", plot = p1, width = 9, height = 12, device = cairo_pdf)
+
+## Emptying the environment
+rm(list = ls())
+```
