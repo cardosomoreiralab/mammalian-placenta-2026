@@ -1,0 +1,326 @@
+---
+title: "COL3351A5: Annotation"
+author: "Marcin Falis"
+date: "September 27th, 2024"
+last_update: "September 27th, 2024"
+script_version: "1.0"
+output: html_notebook
+---
+## Preparing the work space
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/sc_Mm/analysis/COL3351A5/")
+options(bitmapType = "cairo")
+```
+### Loading required packages and scripts
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(stringr)
+```
+### Loading previously created Seurat object
+```{r}
+COL3351A5 <- readRDS(file = "Data/COL3351A5_filt_norm_cl_DPv2.0.rds")
+```
+### Visualizing the UMAP
+```{r}
+Idents(object = COL3351A5) <- "RNA_snn_res.0.6"
+COL3351A5_umap_r0.5 <- DimPlot(COL3351A5, reduction = "umap", label = TRUE, label.size = 3.5) + theme(axis.text = element_text(size = 12), axis.title = element_text(size = 12, face = "bold"))
+COL3351A5_umap_r0.5
+COL3351A5_umap_r0.5_NL <- DimPlot(COL3351A5, reduction = "umap", label = F) + theme(axis.text = element_text(size = 12), axis.title = element_text(size = 12, face = "bold"))
+COL3351A5_umap_r0.5_NL
+ggsave(filename = "Visuals/COL3351A5_UMAP_Label_DPv2.0.pdf", plot = COL3351A5_umap_r0.5, width = 10, height = 7)
+ggsave(filename = "Visuals/COL3351A5_UMAP_NoLabel_DPv2.0.pdf", plot = COL3351A5_umap_r0.5_NL, width = 10, height = 7)
+```
+### Let's now view the number of doublets per cluster, percentage-wise
+```{r}
+df_num <- FetchData(COL3351A5, vars = c("ident", "DF.classifications_0.05")) %>%
+        dplyr::count(ident, DF.classifications_0.05) %>%
+        tidyr::spread(ident, n)
+rownames(df_num) <- df_num[,1]
+df_num <- df_num[,-1]
+tot <- colSums(df_num, na.rm = T)
+metric_df <- as.data.frame(apply(X = df_num, MARGIN = 1, FUN = function(X){
+  X / tot * 100
+}))
+## Sanity Check
+rowSums(metric_df, na.rm = T)
+```
+### Inspecting the output
+```{r}
+metric_df
+na.omit(metric_df[metric_df$Doublet >= 40,]) # clusters that have more than 40% doublets as give by df
+```
+## Visualizing expression of doublets and "nones"
+```{r}
+DimPlot(COL3351A5, reduction = "umap", label = F, group.by = "percent.class")
+DimPlot(COL3351A5, reduction = "umap", label = F, group.by = "DF.classifications_0.05") # 5%
+DimPlot(COL3351A5, reduction = "umap", label = F, group.by = "DF.classifications_0.1") # 10%
+COL3351A5_umap_r0.5
+```
+### Let's now view these numbers per cluster, percentage-wise
+```{r}
+perc.class_num <- FetchData(COL3351A5, vars = c("ident", "percent.class")) %>%
+        dplyr::count(ident, percent.class) %>%
+        tidyr::spread(ident, n)
+rownames(perc.class_num) <- perc.class_num[,1]
+perc.class_num <- perc.class_num[,-1]
+tot <- colSums(perc.class_num, na.rm = T)
+metric_class <- as.data.frame(apply(X = perc.class_num, MARGIN = 1, FUN = function(X){
+  X / tot * 100
+}))
+## Sanity Check
+rowSums(metric_class, na.rm = T)
+```
+### Inspecting the output
+```{r}
+metric_class
+```
+### Loading Y-linked genes
+```{r}
+rat_y <- readRDS(file = "/camp/home/falism/Scratch_MF/ReferenceLists_SourceFiles/YGenes/Mm_yGenes_PCG_Ensembl104.rds")
+
+#Transforming the ensembl IDs into ensembl-symbol hybrids used in the dataset
+y_genes <- c()
+for (i in 1:length(rat_y)) {
+  y_genes <- append(x = y_genes, values = grep(rat_y[i], rownames(COL3351A5[["RNA"]]), value = T))
+}
+```
+### Investigating expression of sex-dependent markers
+```{r}
+FeaturePlot(object = COL3351A5, features = c("ENSMUSG00000086503-Xist", y_genes), combine = F, label = T)
+VlnPlot(COL3351A5, features = c("ENSMUSG00000086503-Xist", y_genes), combine = F)
+DotPlot(object = COL3351A5, features =  c("ENSMUSG00000086503-Xist", y_genes), dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### Investigating the patterns of potentially confounding variables (**percent.mt**, **percent.rr**, **nFeature_MmA**, **nCounts_MmA**). The percentage of mito/rsp is just a metric - there is no information stored in the gene matrix, only a number. 
+```{r}
+FeaturePlot(COL3351A5, features = c("percent.mt", "percent.rr", "nFeature_MmA", "nCount_MmA"), combine = F, label = T)
+VlnPlot(COL3351A5, features = c("percent.mt", "percent.rr", "nFeature_MmA", "nCount_MmA"), combine = F)
+```
+## Visualizing expression of canonical markers
+## Visualizing some panmarkers
+```{r}
+panmarkers <- c("ENSMUSG00000031870-Pgr", "ENSMUSG00000019768-Esr1", "ENSMUSG00000020717-Pecam1", "ENSMUSG00000026395-Ptprc", "ENSMUSG00000045394-Epcam", "ENSMUSG00000028640-Tfap2c", "ENSMUSG00000015619-Gata3", "ENSMUSG00000023333-Gcm1", "ENSMUSG00000022797-Tfrc", "ENSMUSG00000021439-Ctsq", "ENSMUSG00000035783-Acta2", "ENSMUSG00000026678-Rgs5", "ENSMUSG00000000303-Cdh1")
+FeaturePlot(object = COL3351A5, features = panmarkers, combine = F,  label = T, raster = F)
+VlnPlot(object = COL3351A5, features = panmarkers, combine = F,  raster = F)
+DotPlot(object = COL3351A5, features = panmarkers, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### Decidual Stroma
+```{r}
+dsc_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_DecidualCells.rds")
+FeaturePlot(object = COL3351A5, features = dsc_Mm, combine = F, label = T)
+VlnPlot(object = COL3351A5, features = dsc_Mm, combine = F)
+DotPlot(object = COL3351A5, features = dsc_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### Endothelial Cells
+```{r}
+endo_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Endothelial.rds")
+FeaturePlot(object = COL3351A5, features = endo_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = endo_Mm, combine = F)
+DotPlot(object = COL3351A5, features = endo_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### Epithelial Cells
+```{r}
+epithelial_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Epithelial.rds")
+FeaturePlot(object = COL3351A5, features = epithelial_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = epithelial_Mm, combine = F)
+DotPlot(object = COL3351A5, features = epithelial_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### Pericytes
+```{r}
+pericytes_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Pericytes.rds")
+FeaturePlot(object = COL3351A5, features = pericytes_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = pericytes_Mm, combine = F)
+DotPlot(object = COL3351A5, features = pericytes_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### Checking for collagen making genes
+```{r}
+collagen <- grep("Col", rownames(COL3351A5[["RNA"]]), value = T)
+DotPlot(object = COL3351A5, features = collagen[1:15], dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+DotPlot(object = COL3351A5, features = collagen[15:30], dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+DotPlot(object = COL3351A5, features = collagen[31:length(collagen)], dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### SMC
+```{r}
+smc_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_SMC.rds")
+smc_Mm <- unique(smc_Mm)
+FeaturePlot(object = COL3351A5, features = smc_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = smc_Mm, combine = F)
+DotPlot(object = COL3351A5, features = smc_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### Yolk sac cells and fetal mesenchyme (Elife)
+```{r}
+yolk_sac_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_YolkSac.rds")
+FeaturePlot(object = COL3351A5, features = yolk_sac_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = yolk_sac_Mm, combine = F)
+DotPlot(object = COL3351A5, features = yolk_sac_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### Immune cells
+#### Erythrocytes
+```{r}
+erythrocytes_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Erythrocytes.rds")
+FeaturePlot(object = COL3351A5, features = erythrocytes_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = erythrocytes_Mm, combine = F)
+DotPlot(object = COL3351A5, features = erythrocytes_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Leukocytes
+```{r}
+leukocytes_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Leukocytes.rds")
+FeaturePlot(object = COL3351A5, features = leukocytes_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = leukocytes_Mm, combine = F)
+DotPlot(object = COL3351A5, features = leukocytes_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Macrophages
+```{r}
+macrophages_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Macrophages.rds")
+FeaturePlot(object = COL3351A5, features = macrophages_Mm, combine = F, label = F)
+VlnPlot(object = COL3351A5, features = macrophages_Mm, combine = F)
+DotPlot(object = COL3351A5, features = macrophages_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Monocytes
+```{r}
+monocytes_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Monocytes.rds")
+FeaturePlot(object = COL3351A5, features = monocytes_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = monocytes_Mm, combine = F)
+DotPlot(object = COL3351A5, features = monocytes_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Dendritic Cells
+```{r}
+dc_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_DendriticCells.rds")
+FeaturePlot(object = COL3351A5, features = dc_Mm, combine = F, label = F)
+VlnPlot(object = COL3351A5, features = dc_Mm, combine = F)
+DotPlot(object = COL3351A5, features = dc_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Neutrophils
+```{r}
+neutro_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Neutrophils.rds")
+FeaturePlot(object = COL3351A5, features = neutro_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = neutro_Mm, combine = F)
+DotPlot(object = COL3351A5, features = neutro_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Basophils
+```{r}
+baso_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Basophils.rds")
+FeaturePlot(object = COL3351A5, features = baso_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = baso_Mm, combine = F)
+DotPlot(object = COL3351A5, features = baso_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Platelets
+```{r}
+platelets_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_Platelets.rds")
+FeaturePlot(object = COL3351A5, features = platelets_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = platelets_Mm, combine = F)
+DotPlot(object = COL3351A5, features = platelets_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Lymphocytes - B-cells
+```{r}
+b_cells_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_BCells.rds")
+FeaturePlot(object = COL3351A5, features = b_cells_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = b_cells_Mm, combine = F)
+DotPlot(object = COL3351A5, features = b_cells_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Lymphocytes: T-cells
+```{r}
+t_cells_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_TCells.rds")
+FeaturePlot(object = COL3351A5, features = t_cells_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = t_cells_Mm, combine = F)
+DotPlot(object = COL3351A5, features = t_cells_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### uNK cells
+```{r}
+uNK_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_uNK.rds")
+FeaturePlot(object = COL3351A5, features = uNK_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = uNK_Mm, combine = F)
+DotPlot(object = COL3351A5, features = uNK_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### Labirynth trophoblasts
+### Trying to identify syncytin b. I found the gene by browsing ENSEMBL 104 release, although in the genome, it is annotated as a **pseudogene**. 
+```{r}
+lab_troph_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_LabTroph.rds")
+FeaturePlot(object = COL3351A5, features = c(lab_troph_Mm, "ENSRNOG00000021823-AABR07018318.1"), combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = c(lab_troph_Mm, "ENSRNOG00000021823-AABR07018318.1"), combine = F)
+DotPlot(object = COL3351A5, features = c(lab_troph_Mm, "ENSRNOG00000021823-AABR07018318.1"), dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+#### Junctional Zone
+```{r}
+JZ_troph_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_JZTroph.rds")
+FeaturePlot(object = COL3351A5, features = JZ_troph_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = JZ_troph_Mm, combine = F)
+DotPlot(object = COL3351A5, features = JZ_troph_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### C-TGCs/SpA-TGCs (prolactins)
+```{r}
+spa_ctgc_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_CanSpA.rds")
+FeaturePlot(object = COL3351A5, features = spa_ctgc_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = spa_ctgc_Mm, combine = F)
+DotPlot(object = COL3351A5, features = spa_ctgc_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+### SpA-TGC markers
+```{r}
+SpA_TGC_troph_Mm <- readRDS("/camp/home/falism/Scratch_MF/sc_Mm/markers/Data/Mm_SpATGC.rds")
+FeaturePlot(object = COL3351A5, features = SpA_TGC_troph_Mm, combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = SpA_TGC_troph_Mm, combine = F)
+DotPlot(object = COL3351A5, features = SpA_TGC_troph_Mm, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+## Markers of cellular proliferation
+```{r}
+FeaturePlot(object = COL3351A5, features = c("ENSMUSG00000031004-Mki67", "ENSMUSG00000027342-Pcna"), combine = F, label = T, label.size = 3)
+VlnPlot(object = COL3351A5, features = c("ENSMUSG00000031004-Mki67", "ENSMUSG00000027342-Pcna"), combine = F)
+DotPlot(object = COL3351A5, features = c("ENSMUSG00000031004-Mki67", "ENSMUSG00000027342-Pcna"), dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+## Adding labels. There are several populations of suspicious cells that could be further scrutinized, but for now, let's keep them in the dataset. 
+```{r}
+newIDs <- c("DSC1", "DSC2", "Endothelial1", "DSC3", "DSC4", "Macrophages", "DSC5", "uNK", "DSC6", "Endothelial2", "DSC7", "Endothelial3", "DSC8 (prol.)", "DSC/Troph?", "Doublets", "UterineEpithelium", "Pericytes", "B-cells")
+length(newIDs)
+names(newIDs) <- levels(COL3351A5)
+COL3351A5 <- RenameIdents(COL3351A5, newIDs)
+COL3351A5_umap_annotated <- DimPlot(COL3351A5, reduction = "umap", label = T, pt.size = 0.5, label.size = 3, repel = T) + NoLegend()
+ggsave(filename = "Visuals/COL3351A5_UMAP_Annotated.pdf", plot = COL3351A5_umap_annotated, width = 10, height = 7)
+DimPlot(COL3351A5, reduction = "umap", label = T, pt.size = 0.5, label.size = 3) + NoLegend()
+```
+# Excluding doublets
+### Removing all doublets under DF 5% and entire cluster 20 (doublets)
+```{r}
+to_be_removed <- rownames(COL3351A5@meta.data %>% dplyr::filter(DF.classifications_0.05 == "Doublet"))
+length(to_be_removed)
+COL3351A5 <- subset(COL3351A5, cells = to_be_removed, invert = T)
+COL3351A5 <- subset(COL3351A5, idents = "Doublets", invert = T)
+COL3351A5
+```
+### I will not be removing any other putative doublets, but will save a suspicious cluster to identify them later on
+```{r}
+susp_cells <- rownames(COL3351A5@meta.data %>% filter(seurat_clusters == 7))
+length(susp_cells)
+saveRDS(object = susp_cells, file = "Data/COL3351A5_filt_SuspCells1.rds")
+
+susp_cells <- rownames(COL3351A5@meta.data %>% filter(seurat_clusters == 13))
+length(susp_cells)
+saveRDS(object = susp_cells, file = "Data/COL3351A5_filt_SuspCells2.rds")
+
+susp_cells <- rownames(COL3351A5@meta.data %>% filter(seurat_clusters == 15))
+length(susp_cells)
+saveRDS(object = susp_cells, file = "Data/COL3351A5_filt_SuspCells3.rds")
+```
+## Saving the final matrix for future analysis
+```{r}
+matrix_to_be_saved <- COL3351A5@assays$RNA@counts
+head(matrix_to_be_saved)
+dim(matrix_to_be_saved)
+saveRDS(object = matrix_to_be_saved, file = "Data/COL3351A5_filt_RawCountsMatrix_DPv2.0.rds")
+meta <- COL3351A5@meta.data
+write.table(x = meta, file = "Data/COL3351A5_filt_Metadata_DPv2.0.txt", quote = F, sep = "\t")
+```
+## Concluding the session
+```{r}
+sessionInfo()
+```

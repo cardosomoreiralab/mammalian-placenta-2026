@@ -1,0 +1,280 @@
+---
+title: "Data Processing (individual library)"
+author: "Marcin Falis"
+date: "September 24th, 2024"
+last_update: "September 24th, 2024"
+script_version: "2.0"
+output: html_notebook
+---
+## Preparing the workspace
+### Setting up the working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "~/Scratch_MF/sc_Mm/analysis/COL3351A5/")
+options(bitmapType = "cairo")
+if (dir.exists("./Data") == FALSE) {
+dir.create("./Data")
+}
+if (dir.exists("./Visuals") == FALSE) {
+dir.create("./Visuals")
+}
+```
+### Loading packages and functions
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(R.utils)
+library(reshape2)
+library(gridExtra)
+library("limma")
+library(DoubletFinder)
+library(SoupX)
+source("~/function_starsolo_droplet_v4.r")
+source("~/gene_score_v1.R")
+source("~/function_runsoupx_v1.r")
+source("~/function_samplediagnostics_v2.0.r")
+```
+## Defining variables for the analysis
+```{r}
+library_id <- "COL3351A5"
+species_dir <- "sc_Mm"
+mito_path <- "/camp/home/falism/Scratch_MF/ReferenceLists_SourceFiles/MitoGenes/Mm_MitoGenes_Ensembl104.rds"
+rrna_path <- "/camp/home/falism/Scratch_MF/ReferenceLists_SourceFiles/rRNA/Mm_rRNA_Ensembl104.rds"
+y_genes_path <- "/camp/home/falism/Scratch_MF/ReferenceLists_SourceFiles/YGenes/Mm_yGenes_PCG_Ensembl104.rds"
+rps_pattern <- "-Rp[sl]"
+remove_fetomaternal <- TRUE
+counts_threshold <- c(1000,50000)
+genes_threshold <- c(500,10000)
+mt_threshold <- 10
+rr_threshold <- 10
+n_hvgs <- 5000
+```
+## Evaluating mapping results
+```{r}
+mapping_stats <- sample_diagnostics(paste0("/camp/home/falism/Scratch_MF/", species_dir, "/aln/", library_id, "_SS/"))
+```
+## Filtering empty droplets vs cells (using uniquely mapped reads only)
+```{r}
+solo_filt.out <- filter_droplet(library_id, 
+                                fullMtx = paste0("/camp/home/falism/Scratch_MF/", species_dir, "/aln/", library_id, "_SS/Solo.out/GeneFull/raw/matrix.mtx"), 
+                                exonMtx = paste0("/camp/home/falism/Scratch_MF/", species_dir, "/aln/", library_id, "_SS/Solo.out/Gene/raw/matrix.mtx"), 
+                                min_umi = 100, 
+                                filt = "threshold", 
+                                cutoff = 0.1,
+                                n = 20000)
+```
+## QC + Normalization
+```{r}
+## Extracting cell labels and retrieving them from a unique + multimapped counts
+cells_to_retain <- colnames(solo_filt.out$full)
+mtx_multi <- readMtx(paste0("/camp/home/falism/Scratch_MF/", species_dir, "/aln/", library_id, "_SS/Solo.out/GeneFull/raw/UniqueAndMult-EM.mtx"), min_umi = 100)
+toc <- mtx_multi[,colnames(mtx_multi) %in% cells_to_retain]
+tod <- readMtx(paste0("/camp/home/falism/Scratch_MF/", species_dir, "/aln/", library_id, "_SS/Solo.out/GeneFull/raw/UniqueAndMult-EM.mtx"), min_umi = 0)
+
+## Running SoupX (ambient RNA correction)
+soupx_output <- run_soupx(toc = toc, tod = tod)
+
+## Creating a Seurat object
+seurat_object <- CreateSeuratObject(counts = soupx_output$adj.counts, project = library_id, min.cells = 3, min.features = 200)
+print(paste("The object has:", length(colnames(seurat_object)), "nuclei."))
+print(paste("The object has:", length(rownames(seurat_object)), "genes."))
+
+## Identifying the most prevalent genes in the object (pre-QC and normalization); credits: Swedish Institute of Bioinformatics, scRNAseq course: https://nbisweden.github.io/workshop-scRNAseq/labs/compiled/seurat/seurat_01_qc.html#Calculate_cell-cycle_scores)
+C <- seurat_object@assays$RNA@counts
+C <- Matrix::t(Matrix::t(C)/Matrix::colSums(C)) * 100
+most_expressed <- order(apply(C, 1, median), decreasing = T)[20:1]
+pdf(paste0("Visuals/", library_id, "_TopGenesPreFilter.pdf"), width = 20, height = 10)
+par(mar = c(3, 13, 2, 1))
+boxplot(as.matrix(t(C[most_expressed, ])), cex.axis = 0.6, cex = 0.1, las = 1, xlab = "% total count per cell",col = (scales::hue_pal())(20)[20:1], horizontal = TRUE)
+dev.off()
+
+### Removing unused objects and collecting free memory
+rm(C)
+rm(solo_filt.out)
+rm(toc)
+rm(tod)
+rm(mtx_multi)
+gc()
+
+## Adding information about mitogenes, ribosomal and/or y-genes
+ids_mito <- readRDS(file = mito_path)
+
+### Transforming the ensembl IDs into ensembl-symbol hybrids used in the dataset
+mitogenes <- c()
+for (i in 1:length(ids_mito)) {
+  mitogenes <- append(x = mitogenes, values = grep(ids_mito[i], rownames(seurat_object[["RNA"]]), value = T))
+}
+seurat_object[["percent.mt"]] <- PercentageFeatureSet(seurat_object, features = mitogenes)
+
+### rRNA/riboproteins
+ids_rrna <- readRDS(file = rrna_path)
+
+### Transforming the ensembl IDs into ensembl-symbol hybrids used in the dataset
+rRNAs <- c()
+for (i in 1:length(ids_rrna)) {
+  rRNAs <- append(x = rRNAs, values = grep(ids_rrna[i], rownames(seurat_object[["RNA"]]), value = T))
+}
+ribosomal_proteins <- grep(pattern = rps_pattern, x = rownames(seurat_object[["RNA"]]), value = T)
+seurat_object[["percent.rr"]] <- PercentageFeatureSet(seurat_object, features = rRNAs)
+seurat_object[["percent.rps"]] <- PercentageFeatureSet(seurat_object, features = ribosomal_proteins)
+
+## Sex-dependent expression
+human_y <- readRDS(file = y_genes_path)
+
+#Transforming the ensembl IDs into ensembl-symbol hybrids used in the dataset
+y_genes <- c()
+for (i in 1:length(human_y)) {
+  y_genes <- append(x = y_genes, values = grep(human_y[i], rownames(seurat_object[["RNA"]]), value = T))
+}
+
+### Saving the percentage values of reads mapping to Xist and Y-linked genes
+seurat_object[["percent.xist"]] <- PercentageFeatureSet(seurat_object, features = "ENSMUSG00000086503-Xist")
+seurat_object[["percent.y_genes"]] <- PercentageFeatureSet(seurat_object, features = y_genes)
+
+## Adding doublet classification to the object
+seurat_object[["percent.class"]] <- NA
+
+for (i in 1:nrow(seurat_object@meta.data)) {
+  if (seurat_object@meta.data$percent.xist[i] == 0 & seurat_object@meta.data$percent.y_genes[i] == 0) {
+    seurat_object@meta.data$percent.class[i] <- "None"
+  } 
+  else if (seurat_object@meta.data$percent.xist[i] > 0 & seurat_object@meta.data$percent.y_genes[i] == 0) {
+    seurat_object@meta.data$percent.class[i] <- "Maternal"
+  } 
+  else if (seurat_object@meta.data$percent.xist[i] == 0 & seurat_object@meta.data$percent.y_genes[i] > 0) {
+    seurat_object@meta.data$percent.class[i] <- "Fetal"
+  } 
+  else if (seurat_object@meta.data$percent.xist[i] > 0 & seurat_object@meta.data$percent.y_genes[i] > 0) {
+    seurat_object@meta.data$percent.class[i] <- "Doublet"
+  }
+}
+
+### Visualizing basic metrics using violin plots
+VlnPlot(seurat_object, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(seurat_object, features = c("percent.rr", "percent.rps"), ncol = 3)
+
+### Visualizing basic metrics using density plots
+# Distribution of UMIs/transcripts per cell
+p3 <- seurat_object@meta.data %>%
+  ggplot(aes(color = orig.ident, x = nCount_RNA, fill = orig.ident)) + geom_density(alpha = 0.2) + scale_x_log10() + theme_classic() +
+  ylab("Cell density") + geom_vline(xintercept = counts_threshold, linetype = "dotted")
+p3
+# Distribution of genes detected per cell
+p4 <- seurat_object@meta.data %>%
+  ggplot(aes(color = orig.ident, x = nFeature_RNA, fill = orig.ident)) + geom_density(alpha = 0.2) + scale_x_log10() + theme_classic() + geom_vline(xintercept = genes_threshold, linetype = "dotted")
+p4
+# Distribution of mt.percentages per cell
+p1 <- seurat_object@meta.data %>%
+  ggplot(aes(color = orig.ident, x = percent.mt, fill = orig.ident)) + geom_density(alpha = 0.2) + scale_x_log10() + theme_classic() + geom_vline(aes(xintercept = 2.5, linetype = "2.5%"), colour = "red") + geom_vline(aes(xintercept = 5, linetype = "5.0%"), colour = "blue") + geom_vline(aes(xintercept = 10, linetype = "10%"), colour = "black") + scale_linetype_manual(name = "Threshold", values = c(2,2,2), guide = guide_legend(override.aes = list(color = c("black", "red", "blue"))))
+p1
+# Distribution of mt.percentages per cell
+p2 <- seurat_object@meta.data %>%
+  ggplot(aes(color = orig.ident, x = percent.rr, fill = orig.ident)) + geom_density(alpha = 0.2) + scale_x_log10() + theme_classic() + geom_vline(aes(xintercept = 2.5, linetype = "2.5%"), colour = "red") + geom_vline(aes(xintercept = 5, linetype = "5.0%"), colour = "blue") + geom_vline(aes(xintercept = 10, linetype = "10%"), colour = "black") + scale_linetype_manual(name = "Threshold", values = c(2,2,2), guide = guide_legend(override.aes = list(color = c("black", "red", "blue"))))
+p2
+
+ggsave(paste0("Visuals/", library_id, "_percmt.pdf"), plot = p1, height = 7, width = 10)
+ggsave(paste0("Visuals/", library_id, "_percrr.pdf"), plot = p2, height = 7, width = 10)
+ggsave(paste0("Visuals/", library_id, "_genes.pdf"), plot = p4, height = 7, width = 10)
+ggsave(paste0("Visuals/", library_id, "_counts.pdf"), plot = p3, height = 7, width = 10)
+
+### Visualizing all quality metrics in the same graph
+seurat_object@meta.data %>%
+  ggplot(aes(x = nCount_RNA, y = nFeature_RNA, color = percent.mt)) + geom_point() +
+  scale_colour_gradient(low = "gray90", high = "black") + stat_smooth(method = lm) + 
+  scale_x_log10() + scale_y_log10() + theme_classic() + geom_hline(yintercept = genes_threshold, linetype = "dotted") + geom_vline(xintercept = counts_threshold, linetype = "dotted")
+
+seurat_object@meta.data %>%
+  ggplot(aes(x = nCount_RNA, y = nFeature_RNA, color = percent.rr)) + geom_point() +
+  scale_colour_gradient(low = "gray90", high = "black") + stat_smooth(method = lm) + 
+  scale_x_log10() + scale_y_log10() + theme_classic() + geom_hline(yintercept = genes_threshold, linetype = "dotted") + geom_vline(xintercept = counts_threshold, linetype = "dotted")
+
+## Quality-based filtering
+### Filtering based on the % mapping to mitochondrial and rRNA
+seurat_object <- subset(seurat_object, subset = percent.mt < mt_threshold) 
+seurat_object <- subset(seurat_object, subset = percent.rr < rr_threshold)
+print(paste("Number of nuclei remaining after mito/rr filtering:", dim(seurat_object@meta.data)[1]))
+
+### Removing mitogened and rRNA from the object to prevent them from being selected for dimensionality reduction
+to_remove <- unique(union(rRNAs, mitogenes))
+seurat_object <- seurat_object[!rownames(seurat_object) %in% to_remove,]
+
+### Filtering based on the number of counts and genes
+seurat_object <- subset(seurat_object, subset = nFeature_RNA > genes_threshold[1] & nFeature_RNA < genes_threshold[2])
+seurat_object <- subset(seurat_object, subset = nCount_RNA > counts_threshold[1] & nCount_RNA < counts_threshold[2])
+print(paste("Number of nuclei remaining after count/genes filtering:", dim(seurat_object@meta.data)[1]))
+
+### Fetomaternal doublet treatment 
+print(paste("The number of putative fetomaternal doublets is:", length(colnames(seurat_object[,seurat_object@meta.data$percent.class == "Doublet"]))))
+if(remove_fetomaternal == TRUE) {
+  seurat_object <- subset(seurat_object, subset = percent.class != "Doublet")
+  print(paste("Number of cells remaining after removal of putative fetomaternal doublets:", dim(seurat_object@meta.data)[1]))
+} else {
+  print("Chose not to remove fetomaternal doublets. Continuing.")
+}
+
+### Identifying the most prevalent genes across nuclei (post-filtering)
+C <- seurat_object@assays$RNA@counts
+C <- Matrix::t(Matrix::t(C)/Matrix::colSums(C)) * 100
+most_expressed <- order(apply(C, 1, median), decreasing = T)[20:1]
+pdf(paste0("Visuals/", library_id, "_TopGenesPostFilter.pdf"), width = 20, height = 10)
+par(mar = c(3, 13, 2, 1))
+boxplot(as.matrix(t(C[most_expressed, ])), cex.axis = 0.6, cex = 0.1, las = 1, xlab = "% total count per cell",col = (scales::hue_pal())(20)[20:1], horizontal = TRUE)
+dev.off()
+
+## Normalization, Selection of Highly Variable Genes, Scaling, Dimensionality Reduction
+seurat_object <- NormalizeData(seurat_object, normalization.method = "LogNormalize", scale.factor = 10000, verbose = T)
+seurat_object <- FindVariableFeatures(seurat_object, selection.method = "vst", nfeatures = n_hvgs, verbose = T)
+all.genes <- rownames(seurat_object)
+seurat_object <- ScaleData(seurat_object, features = all.genes, verbose = T)
+seurat_object <- RunPCA(seurat_object, features = VariableFeatures(object = seurat_object), verbose = T)
+
+### Investigating PCs and deciding how many to take
+print(x=seurat_object[["pca"]], dims = 1:10, nfeatures = 5)
+ElbowPlot(seurat_object, ndims = 50) 
+
+## Identifying the last PC which differs from the remaining ones by less than 0.1%. As before, I will nonetheless use a few more PCs, as recommended when using the LogNormalize method
+### Credits for the code: HBC training, elbow plot lesson
+## Obtained from https://hbctraining.github.io/scRNA-seq/lessons/elbow_plot_metric.html
+pct <- seurat_object[["pca"]]@stdev / sum(seurat_object[["pca"]]@stdev) * 100
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+co2
+```
+## Specifying variables for clustering, umap projection and saving files
+```{r}
+## Specifying variables
+res = 0.6
+final_pc_component = 30
+
+## Executing the clustering
+seurat_object <- FindNeighbors(seurat_object, dims = 1:final_pc_component)
+seurat_object <- FindClusters(seurat_object, resolution = res)
+seurat_object <- RunUMAP(seurat_object, dims = 1:final_pc_component)
+DimPlot(seurat_object, reduction = "umap", label = T)
+
+## Running DoubletFinder
+seurat_object <- run_doubletfinder(object = seurat_object, perc_doublets = c(0.05, 0.1))
+
+### Visualizing doublets on the UMAP
+DimPlot(seurat_object, reduction = "umap", group.by = "DF.classifications_0.05") #nExp_poi.adj: 5% of the filtered nuclei
+DimPlot(seurat_object, reduction = "umap", group.by = "DF.classifications_0.1") #nExp_poi.adj: 10% of the filtered nuclei
+DimPlot(seurat_object, reduction = "umap", label = T)
+
+## Saving a filtered Seurat object with clustering information and doublet identification included
+saveRDS(object = seurat_object, file = paste0("/camp/home/falism/Scratch_MF/", species_dir, "/analysis/", library_id, "/Data/", library_id, "_filt_norm_cl_DPv2.0.rds"))
+```
+## Visualizing some panmarkers
+```{r}
+panmarkers <- c("ENSMUSG00000031870-Pgr", "ENSMUSG00000019768-Esr1", "ENSMUSG00000020717-Pecam1", "ENSMUSG00000026395-Ptprc", "ENSMUSG00000045394-Epcam", "ENSMUSG00000028640-Tfap2c", "ENSMUSG00000015619-Gata3", "ENSMUSG00000023333-Gcm1", "ENSMUSG00000022797-Tfrc", "ENSMUSG00000021439-Ctsq", "ENSMUSG00000035783-Acta2", "ENSMUSG00000026678-Rgs5", "ENSMUSG00000000303-Cdh1")
+FeaturePlot(object = seurat_object, features = panmarkers, combine = F,  label = T, raster = F)
+VlnPlot(object = seurat_object, features = panmarkers, combine = F,  raster = F)
+DotPlot(object = seurat_object, features = panmarkers, dot.scale = 2) + RotatedAxis() + theme(plot.title = element_text(size=10), axis.title = element_text(size=10), axis.text = element_text(size=7))
+```
+## Concluding the session
+```{r}
+sessionInfo()
+```
