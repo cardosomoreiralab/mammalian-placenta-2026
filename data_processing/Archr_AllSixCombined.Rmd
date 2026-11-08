@@ -1,0 +1,1278 @@
+---
+title: "Combined analysis of 6 samples: Final Attempt"
+author: "Marcin Falis"
+date: 'March 11th, 2026'
+last_update: 'August 7th, 2026'
+output: html_document
+---
+# Setting up the working directory
+```{r setup}
+require("knitr")
+opts_knit$set(root.dir = "/nemo/lab/cardoso-moreiam/home/users/falism/ATAC/sc_Mm/combined_analysis_final/")
+options(bitmapType="cairo")
+```
+# Loading packages
+```{r}
+library(dplyr)
+library(ArchR)
+library(Seurat)
+library(BSgenome)
+library(BSgenome.Mmusculus.UCSC.mm39)
+library(org.Mm.eg.db)
+library("GenomicFeatures")
+library(parallel)
+library(BiocGenerics)
+library(ComplexHeatmap)
+library(factoextra)
+library(dendextend)
+library(ggdendro)
+library(Gviz)
+```
+# Setting up general ArchR parameters
+```{r}
+addArchRLocking(locking = TRUE)
+addArchRThreads(threads = 64)
+```
+# Creating files
+## Creating genome annotation
+```{r}
+## Reading in the blacklist for genome annotation
+exclude.mm39 <- import.bed("/nemo/lab/cardoso-moreiam/home/users/falism/ATAC/sc_Mm/ref_files/mm39.blacklist.bedbase.14Oct2025.adjusted.bed")
+
+## Converting GTF to a suitable gene annotation format
+txdb_metadata <- data.frame(name = "Resource URL", value = "ftp://ftp.ensembl.org/pub/release-104/gtf/mus_musculus/")
+TxDb_mm39 <- makeTxDbFromGFF(file = "/nemo/lab/cardoso-moreiam/home/users/falism/ATAC/sc_Mm/ref_files/Mus_musculus.GRCm39.104.ChrPrefAdded.Final.gtf", dataSource = "ensemblgenomes", organism = "Mus musculus", metadata = txdb_metadata, dbxrefTag = "gene_id")
+```
+## Creating the reference
+```{r}
+## Creating genome annotation
+filterChr <- seqlevels(BSgenome.Mmusculus.UCSC.mm39)[-(1:21)] ## magic number = number of chromosomes we actually want to keep
+genomeAnnotation <- createGenomeAnnotation(BSgenome.Mmusculus.UCSC.mm39, filterChr = filterChr, filter = T, blacklist = exclude.mm39)
+
+## Creating gene annotation
+geneAnnotation <- createGeneAnnotation(TxDb = dropSeqlevels(keepStandardChromosomes(TxDb_mm39), "chrM"), OrgDb = org.Mm.eg.db, annoStyle = "ENSEMBL")
+```
+## Creating ArchR files
+```{r}
+## Reverting back to 1 thread
+addArchRThreads(threads = 1)
+
+input_files <- c("../aln/sa011_Mouse_Placenta_e18_M/sa011_Mouse_Placenta_e18_M/outs/fragments.tsv.gz", "../aln/sa030_Mouse_Placenta_e10_M/sa030_Mouse_Placenta_e10_M/outs/fragments.tsv.gz", "../aln/sa032_Mouse_Decidua_e10_M/sa032_Mouse_Decidua_e10_M/outs/fragments.tsv.gz", "../aln/sa051_Mouse_Placenta_e10_5_M/sa051_Mouse_Placenta_e10_5_M/outs/fragments.tsv.gz", "../aln/sa127_Mouse_Placenta_e10_M/sa127_Mouse_Placenta_e10_M/outs/fragments.tsv.gz", "../aln/sa140_Mouse_Placenta_e14_M/sa140_Mouse_Placenta_e14_M/outs/fragments.tsv.gz")
+
+sample_names <- c("sa011", "sa030", "sa032", "sa051", "sa127", "sa140")
+
+ArrowFiles <- createArrowFiles(inputFiles = input_files, sampleNames=sample_names, outputNames = sample_names, geneAnnotation = geneAnnotation, genomeAnnotation = genomeAnnotation, minTSS = 4, minFrags = 1000, addTileMat = TRUE, addGeneScoreMat = TRUE)
+```
+## Creating ArchR project
+```{r}
+proj_test <- ArchRProject(
+  ArrowFiles = ArrowFiles, 
+  outputDirectory = "Data/combined_analysis_v1/",
+  genomeAnnotation = genomeAnnotation,
+  geneAnnotation = geneAnnotation,
+  copyArrows = TRUE)
+
+proj_test <- saveArchRProject(ArchRProj = proj_test, outputDirectory = "Data/combined_analysis_v1/", load = TRUE)
+```
+## Investigating the saved project and retaining only cells that I deemed good in the individual analyses
+```{r}
+## Getting IDs of "good" cells
+gc_1 <- readRDS("../analysis/Data/SA011/SA011_GoodCellsIDs.rds")
+gc_2 <- readRDS("../analysis/Data/SA030/SA030_GoodCellsIDs.rds")
+gc_3 <- readRDS("../analysis/Data/SA032/SA032_GoodCellsIDs.rds")
+gc_4 <- readRDS("../analysis/Data/SA051/SA051_GoodCellsIDs.rds")
+gc_5 <- readRDS("../analysis/Data/SA127/SA127_GoodCellsIDs.rds")
+gc_6 <- readRDS("../analysis/Data/SA140/SA140_GoodCellsIDs.rds")
+
+## combining into one long vector
+good_cells <- c(gc_1, gc_2, gc_3, gc_4, gc_5, gc_6)
+
+## Subsetting to good cells only
+proj_test_2 <- subsetArchRProject(
+  ArchRProj = proj_test,
+  cells = good_cells,
+  outputDirectory = "Data/combined_analysis_v2_onlygoodcells/",
+  dropCells = TRUE,
+  force = TRUE
+  )
+
+length(proj_test$cellNames)
+length(proj_test_2$cellNames)
+
+## Save the project
+proj_test_2 <- saveArchRProject(ArchRProj = proj_test_2, outputDirectory = "Data/combined_analysis_v2_onlygoodcells/", load = TRUE)
+```
+## Dimensionality reduction and clustering
+```{r}
+## Back to multi threading
+addArchRThreads(threads = 64)
+
+proj_test_2 <- addIterativeLSI(
+    ArchRProj = proj_test_2,
+    useMatrix = "TileMatrix", 
+    name = "IterativeLSI", 
+    iterations = 2, 
+    varFeatures = 25000, 
+    dimsToUse = 1:30,
+    force = T
+)
+
+proj_test_2 <- addClusters(
+    input = proj_test_2,
+    reducedDims = "IterativeLSI",
+    method = "Seurat",
+    name = "Clusters",
+    resolution = 0.8,
+    force = T
+)
+
+proj_test_2 <- addUMAP(
+    ArchRProj = proj_test_2, 
+    reducedDims = "IterativeLSI", 
+    name = "UMAP", 
+    nNeighbors = 30, 
+    minDist = 0.5, 
+    metric = "cosine",
+    force = T
+)
+
+p1 <- plotEmbedding(ArchRProj = proj_test_2, colorBy = "cellColData", name = "Clusters", embedding = "UMAP")
+p1
+```
+## Visualizing different variables on the UMAP
+```{r}
+## Base option: clusters
+p1 <- plotEmbedding(ArchRProj = proj_test_2, colorBy = "cellColData", name = "Clusters", embedding = "UMAP")
+p1
+
+## Show doublet score
+p2 <- plotEmbedding(ArchRProj = proj_test_2, colorBy = "cellColData", name = "Sample", embedding = "UMAP")
+
+## Plot together
+ggAlignPlots(p1, p2, type = "h")
+
+## Show TSS enrichment
+p3 <- plotEmbedding(ArchRProj = proj_test_2, colorBy = "cellColData", name = "TSSEnrichment", embedding = "UMAP")
+p4 <- plotEmbedding(ArchRProj = proj_test_2, colorBy = "cellColData", name = "ReadsInTSS", embedding = "UMAP")
+p5 <- plotEmbedding(ArchRProj = proj_test_2, colorBy = "cellColData", name = "ReadsInBlacklist", embedding = "UMAP")
+p6 <- plotEmbedding(ArchRProj = proj_test_2, colorBy = "cellColData", name = "nFrags", embedding = "UMAP")
+ggAlignPlots(p1, p3, type = "h")
+ggAlignPlots(p1, p4, type = "h")
+ggAlignPlots(p1, p5, type = "h")
+ggAlignPlots(p1, p6, type = "h")
+```
+## Markers
+```{r}
+## Back to single threading
+addArchRThreads(threads = 1)
+
+## Computing markers (returns a SummarizedExperiment object)
+markersGS <- getMarkerFeatures(
+    ArchRProj = proj_test_2, 
+    useMatrix = "GeneScoreMatrix", 
+    groupBy = "Clusters",
+    bias = c("TSSEnrichment", "log10(nFrags)"),
+    testMethod = "wilcoxon"
+)
+
+## Converting to a dataframe
+markerList <- getMarkers(markersGS, cutOff = "FDR <= 0.05 & Log2FC >= 1")
+markerList$C13 %>% as.data.frame()
+```
+## Visualizing canonical markers to get a further understanding of the structure
+```{r}
+to_be_viewed <- c("Pgr", "Esr1", "Eva1c", "Hoxa11", "Gramd1b", "Pecam1", "Kdr", "Tek", "Tie1", "Hbb-y", "Epcam", "Cdh1", "Pax8")
+p <- plotEmbedding(
+    ArchRProj = proj_test_2,
+    colorBy = "GeneScoreMatrix", 
+    name = to_be_viewed, 
+    embedding = "UMAP",
+    quantCut = c(0.01, 0.95),
+    imputeWeights = NULL
+)
+p
+```
+## I have a good idea of what the clusters are. As a last step, let's visualize whether any of the clusters correspond to cells I deemed suspicious in the individual analysis.
+## Empty vector to which I will save cells to be removed
+```{r}
+to_be_removed <- c()
+```
+## SA011
+```{r}
+susp <- readRDS("../analysis/Data/SA011/SA011_SuspiciousCellsIDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+## Decision - remove
+to_be_removed <- append(x = to_be_removed, values = susp)
+```
+## SA030
+```{r}
+## Suspicious 1
+susp <- readRDS("../analysis/Data/SA030/SA030_SuspiciousCells1IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - keep for now
+#to_be_removed <- append(x = to_be_removed, values = susp)
+
+## Suspicious 2
+susp <- readRDS("../analysis/Data/SA030/SA030_SuspiciousCells2IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - keep for now
+#to_be_removed <- append(x = to_be_removed, values = susp)
+
+## Suspicious 3
+susp <- readRDS("../analysis/Data/SA030/SA030_SuspiciousCells3IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - remove
+to_be_removed <- append(x = to_be_removed, values = susp)
+```
+## SA032
+```{r}
+# Suspicious 1
+susp <- readRDS("../analysis/Data/SA032/SA032_SuspiciousCells1IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - remove
+to_be_removed <- append(x = to_be_removed, values = susp)
+
+# Suspicious 2
+susp <- readRDS("../analysis/Data/SA032/SA032_SuspiciousCells2IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - remove
+to_be_removed <- append(x = to_be_removed, values = susp)
+
+# Suspicious 3
+susp <- readRDS("../analysis/Data/SA032/SA032_SuspiciousCells3IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - remove
+to_be_removed <- append(x = to_be_removed, values = susp)
+
+# Suspicious 4
+susp <- readRDS("../analysis/Data/SA032/SA032_SuspiciousCells4IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - keep for now
+#to_be_removed <- append(x = to_be_removed, values = susp)
+```
+## SA051
+```{r}
+# Suspicious 1
+susp <- readRDS("../analysis/Data/SA051/SA051_SuspiciousCells1IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - remove
+to_be_removed <- append(x = to_be_removed, values = susp)
+```
+## SA127
+```{r}
+# Suspicious 1
+susp <- readRDS("../analysis/Data/SA127/SA127_SuspiciousCellsIDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - keep for now
+#to_be_removed <- append(x = to_be_removed, values = susp)
+```
+## SA140
+```{r}
+# Suspicious 1
+susp <- readRDS("../analysis/Data/SA140/SA140_SuspiciousCells1IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - remove
+to_be_removed <- append(x = to_be_removed, values = susp)
+
+# Suspicious 2
+susp <- readRDS("../analysis/Data/SA140/SA140_SuspiciousCells2IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - remove
+to_be_removed <- append(x = to_be_removed, values = susp)
+
+# Suspicious 3
+susp <- readRDS("../analysis/Data/SA140/SA140_SuspiciousCells3IDs.rds")
+
+plotEmbedding(
+  ArchRProj = proj_test_2,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - remove
+to_be_removed <- append(x = to_be_removed, values = susp)
+```
+## Exclude cells deemed low quality from the atlas and re-do the clustering
+### I will do so by 1) removing cells that I saved in the vector to_be_removed and 2) by excluding the entire clusters that are bad
+```{r}
+## Bad clusters = 9,11,13
+bad_clusters <- proj_test_2@cellColData %>% as.data.frame() %>% dplyr::filter(Clusters %in% c("C9","C11","C13")) %>% rownames()
+
+## Cells deemed bad above
+to_be_removed
+
+## Combine
+bad_cells <- union(bad_clusters, to_be_removed)
+length(bad_cells)
+
+## As ArchR seems to rename clusters arbitrarily, I save a vector of cells should one wish to ever reanalyze the data
+saveRDS("Data/combined_analysis_v2_onlygoodcells/ExcludedCells.rds", object = bad_cells)
+
+## Subsetting to good cells only
+cells_to_keep <- proj_test_2$cellNames[!(proj_test_2$cellNames %in% bad_cells)]
+proj_test_3 <- subsetArchRProject(
+  ArchRProj = proj_test_2,
+  cells = cells_to_keep,
+  outputDirectory = "Data/combined_analysis_v3_afterround1/",
+  dropCells = TRUE,
+  force = TRUE
+  )
+
+length(proj_test_2$cellNames)
+length(proj_test_3$cellNames)
+
+## Save the project
+proj_test_3 <- saveArchRProject(ArchRProj = proj_test_3, outputDirectory = "Data/combined_analysis_v3_afterround1/", load = TRUE)
+
+## Remove the previous version of the project to not get confused
+rm(proj_test_2)
+```
+## Dimensionality reduction and clustering
+```{r}
+proj_test_3 <- addIterativeLSI(
+    ArchRProj = proj_test_3,
+    useMatrix = "TileMatrix", 
+    name = "IterativeLSI", 
+    iterations = 2, 
+    varFeatures = 25000, 
+    dimsToUse = 1:30,
+    force = T
+)
+
+proj_test_3 <- addClusters(
+    input = proj_test_3,
+    reducedDims = "IterativeLSI",
+    method = "Seurat",
+    name = "Clusters",
+    resolution = 0.8,
+    force = T
+)
+
+proj_test_3 <- addUMAP(
+    ArchRProj = proj_test_3, 
+    reducedDims = "IterativeLSI", 
+    name = "UMAP", 
+    nNeighbors = 30, 
+    minDist = 0.5, 
+    metric = "cosine",
+    force = T
+)
+
+p1 <- plotEmbedding(ArchRProj = proj_test_3, colorBy = "cellColData", name = "Clusters", embedding = "UMAP")
+p1
+```
+## Visualizing different variables on the UMAP
+```{r}
+## Base option: clusters
+p1 <- plotEmbedding(ArchRProj = proj_test_3, colorBy = "cellColData", name = "Clusters", embedding = "UMAP")
+p1
+
+## Show doublet score
+p2 <- plotEmbedding(ArchRProj = proj_test_3, colorBy = "cellColData", name = "Sample", embedding = "UMAP")
+
+## Plot together
+ggAlignPlots(p1, p2, type = "h")
+
+## Show TSS enrichment
+p3 <- plotEmbedding(ArchRProj = proj_test_3, colorBy = "cellColData", name = "TSSEnrichment", embedding = "UMAP")
+p4 <- plotEmbedding(ArchRProj = proj_test_3, colorBy = "cellColData", name = "ReadsInTSS", embedding = "UMAP")
+p5 <- plotEmbedding(ArchRProj = proj_test_3, colorBy = "cellColData", name = "ReadsInBlacklist", embedding = "UMAP")
+p6 <- plotEmbedding(ArchRProj = proj_test_3, colorBy = "cellColData", name = "nFrags", embedding = "UMAP")
+ggAlignPlots(p1, p3, type = "h")
+ggAlignPlots(p1, p4, type = "h")
+ggAlignPlots(p1, p5, type = "h")
+ggAlignPlots(p1, p6, type = "h")
+```
+## Markers
+```{r}
+## Computing markers (returns a SummarizedExperiment object)
+markersGS <- getMarkerFeatures(
+    ArchRProj = proj_test_3, 
+    useMatrix = "GeneScoreMatrix", 
+    groupBy = "Clusters",
+    bias = c("TSSEnrichment", "log10(nFrags)"),
+    testMethod = "wilcoxon"
+)
+
+## Converting to a dataframe
+markerList <- getMarkers(markersGS, cutOff = "FDR <= 0.05 & Log2FC >= 1")
+markerList$C3 %>% as.data.frame()
+```
+## Visualizing canonical markers to get a further understanding of the structure
+```{r}
+to_be_viewed <- c("Pgr", "Esr1", "Eva1c", "Hoxa11", "Gramd1b", "Pecam1", "Kdr", "Tek", "Tie1", "Hbb-y", "Epcam", "Cdh1", "Pax8", "Mki67")
+p <- plotEmbedding(
+    ArchRProj = proj_test_3,
+    colorBy = "GeneScoreMatrix", 
+    name = to_be_viewed, 
+    embedding = "UMAP",
+    quantCut = c(0.01, 0.95),
+    imputeWeights = NULL
+)
+p
+```
+## I have a good idea of what the clusters are. As a last step, let's visualize whether any of the clusters correspond to cells I deemed suspicious in the individual analysis.
+## Empty vector to which I will save cells to be removed
+```{r}
+to_be_removed <- c()
+```
+## SA030
+```{r}
+## Suspicious 1
+susp <- readRDS("../analysis/Data/SA030/SA030_SuspiciousCells1IDs.rds")
+susp <- susp[susp %in% proj_test_3$cellNames]
+
+plotEmbedding(
+  ArchRProj = proj_test_3,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - keep for now
+#to_be_removed <- append(x = to_be_removed, values = susp)
+
+## Suspicious 2
+susp <- readRDS("../analysis/Data/SA030/SA030_SuspiciousCells2IDs.rds")
+susp <- susp[susp %in% proj_test_3$cellNames]
+
+plotEmbedding(
+  ArchRProj = proj_test_3,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - keep for now
+#to_be_removed <- append(x = to_be_removed, values = susp)
+```
+## SA032
+```{r}
+# Suspicious 4
+susp <- readRDS("../analysis/Data/SA032/SA032_SuspiciousCells4IDs.rds")
+susp <- susp[susp %in% proj_test_3$cellNames]
+
+plotEmbedding(
+  ArchRProj = proj_test_3,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - keep for now
+#to_be_removed <- append(x = to_be_removed, values = susp)
+```
+## SA127
+```{r}
+# Suspicious 1
+susp <- readRDS("../analysis/Data/SA127/SA127_SuspiciousCellsIDs.rds")
+susp <- susp[susp %in% proj_test_3$cellNames]
+
+plotEmbedding(
+  ArchRProj = proj_test_3,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  highlightCells = susp,
+  baseSize = 10,
+  plotAs = "points")
+
+
+## Decision - keep for now
+#to_be_removed <- append(x = to_be_removed, values = susp)
+```
+## Plotting UMAP
+```{r}
+p <- plotEmbedding(
+  ArchRProj = proj_test_3,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Clusters",
+  size = 1,
+  sampleCells = NULL,
+  baseSize = 10,
+  plotAs = "points")
+plotPDF(p, name = "CombinedAnalysis_v3_UMAP.pdf", ArchRProj = proj_test_3, addDOC = FALSE, width = 10, height = 10)
+
+p <- plotEmbedding(
+  ArchRProj = proj_test_3,
+  embedding = "UMAP",
+  colorBy = "cellColData",
+  name = "Sample",
+  size = 1,
+  sampleCells = NULL,
+  baseSize = 10,
+  plotAs = "points")
+plotPDF(p, name = "CombinedAnalysis_v3_UMAP_BySample.pdf", ArchRProj = proj_test_3, addDOC = FALSE, width = 10, height = 10)
+```
+## Exclude cells deemed low quality from the atlas and re-do the clustering
+### I will do so by 1) removing cells that I saved in the vector to_be_removed and 2) by excluding the entire clusters that are bad
+```{r}
+## Bad clusters = C3
+bad_cells <- proj_test_3@cellColData %>% as.data.frame() %>% dplyr::filter(Clusters %in% c("C3")) %>% rownames()
+
+## Subsetting to good cells only
+cells_to_keep <- proj_test_3$cellNames[!(proj_test_3$cellNames %in% bad_cells)]
+proj_test_4 <- subsetArchRProject(
+  ArchRProj = proj_test_3,
+  cells = cells_to_keep,
+  outputDirectory = "Data/combined_analysis_v4_afterround2/",
+  dropCells = TRUE,
+  force = TRUE
+  )
+
+length(proj_test_3$cellNames)
+length(proj_test_4$cellNames)
+
+## Save the project
+proj_test_4 <- saveArchRProject(ArchRProj = proj_test_4, outputDirectory = "Data/combined_analysis_v4_afterround2/", load = TRUE)
+
+## Removing previous version of the project to avoid confusion
+rm(proj_test_3)
+```
+## Re-load the project and do one (hopefully last) more round of integration
+## Dimensionality reduction and clustering
+```{r}
+proj_test_4 <- addIterativeLSI(
+    ArchRProj = proj_test_4,
+    useMatrix = "TileMatrix", 
+    name = "IterativeLSI", 
+    iterations = 2, 
+    varFeatures = 25000, 
+    dimsToUse = 1:30,
+    force = T
+)
+
+proj_test_4 <- addClusters(
+    input = proj_test_4,
+    reducedDims = "IterativeLSI",
+    method = "Seurat",
+    name = "Clusters",
+    resolution = 0.8,
+    force = T
+)
+
+proj_test_4 <- addUMAP(
+    ArchRProj = proj_test_4, 
+    reducedDims = "IterativeLSI", 
+    name = "UMAP", 
+    nNeighbors = 30, 
+    minDist = 0.5, 
+    metric = "cosine",
+    force = T
+)
+
+p1 <- plotEmbedding(ArchRProj = proj_test_4, colorBy = "cellColData", name = "Clusters", embedding = "UMAP")
+p1
+```
+## Visualizing different variables on the UMAP
+```{r}
+## Base option: clusters
+p1 <- plotEmbedding(ArchRProj = proj_test_4, colorBy = "cellColData", name = "Clusters", embedding = "UMAP")
+p1
+
+## Show doublet score
+p2 <- plotEmbedding(ArchRProj = proj_test_4, colorBy = "cellColData", name = "Sample", embedding = "UMAP")
+
+## Plot together
+ggAlignPlots(p1, p2, type = "h")
+
+## Show TSS enrichment
+p3 <- plotEmbedding(ArchRProj = proj_test_4, colorBy = "cellColData", name = "TSSEnrichment", embedding = "UMAP")
+p4 <- plotEmbedding(ArchRProj = proj_test_4, colorBy = "cellColData", name = "ReadsInTSS", embedding = "UMAP")
+p5 <- plotEmbedding(ArchRProj = proj_test_4, colorBy = "cellColData", name = "ReadsInBlacklist", embedding = "UMAP")
+p6 <- plotEmbedding(ArchRProj = proj_test_4, colorBy = "cellColData", name = "nFrags", embedding = "UMAP")
+ggAlignPlots(p1, p3, type = "h")
+ggAlignPlots(p1, p4, type = "h")
+ggAlignPlots(p1, p5, type = "h")
+ggAlignPlots(p1, p6, type = "h")
+```
+## Visualizing canonical markers to get a further understanding of the structure
+```{r}
+to_be_viewed <- c("Pgr", "Esr1", "Eva1c", "Hoxa11", "Gramd1b", "Pecam1", "Kdr", "Tek", "Tie1", "Hbb-y", "Epcam", "Cdh1", "Pax8", "Ptprc", "Mitf", "Ncam1", "Plac8", "Mki67", "Met", "Lgr5", "Tcf7l1", "Ror2", "Cdh4", "Pvt1", "Prune2", "Ncam1", "Igfbp7", "Prl2c5", "Synb", "Syna", "Trp63", "Ctsq", "Gata4", "Gata6", "Csf3r", "Adgre1", "Sell", "Gzma")
+p <- plotEmbedding(
+    ArchRProj = proj_test_4, 
+    colorBy = "GeneScoreMatrix", 
+    name = to_be_viewed, 
+    embedding = "UMAP",
+    quantCut = c(0.01, 0.95),
+    imputeWeights = NULL
+)
+
+p
+p1
+```
+```{r}
+## Back to single threading
+addArchRThreads(threads = 1)
+
+## Computing markers (returns a SummarizedExperiment object)
+markersGS <- getMarkerFeatures(
+    ArchRProj = proj_test_4, 
+    useMatrix = "GeneScoreMatrix", 
+    groupBy = "Clusters",
+    bias = c("TSSEnrichment", "log10(nFrags)"),
+    testMethod = "wilcoxon"
+)
+
+## Converting to a dataframe
+markerList <- getMarkers(markersGS, cutOff = "FDR <= 0.05 & Log2FC >= 1")
+markerList$C25 %>% as.data.frame()
+```
+## Adding annotation to the UMAP and removing cluster 11 (low quality cells)
+```{r}
+labelsNew <- c("Monocytes", "uNK", "SynTII", "SynTI1", "SynTI2", "DSC1", "DSC2", "DSC3", "GlyT1", "GlyT2", "Unknown","JZTP", "LaTP", "SpT1", "SpT2", "S-TGC1", "S-TGC2", "YS1", "YS2", "Erythroid", "Endothelial1", "Endothelial2", "Fibroblast", "B-cells", "Macrophages")
+labelsOld <- c("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22", "C23", "C24", "C25")
+
+## Also add cell type level annotation
+cell_types <- c("Monocytes", "uNK", "SynTII", "SynTI", "SynTI", "DSC", "DSC", "DSC", "GlyT", "GlyT", "Unknown", "JZTP", "LaTP", "SpT", "SpT", "STGC", "STGC", "YS", "YS", "Erythroid", "Endothelial", "Endothelial", "Fibroblast", "B-cells", "Macrophages")
+
+proj_test_4$Final_labels <- mapLabels(labels = proj_test_4$Clusters, newLabels = labelsNew, oldLabels = labelsOld)
+proj_test_4$Cell_types <- mapLabels(labels = proj_test_4$Clusters, newLabels = cell_types, oldLabels = labelsOld)
+
+## Removing cluster 11
+bad_cells <- proj_test_4@cellColData %>% as.data.frame() %>% dplyr::filter(Clusters %in% c("C11")) %>% rownames()
+cells_to_keep <- proj_test_4$cellNames[!(proj_test_4$cellNames %in% bad_cells)]
+proj_test_5 <- subsetArchRProject(
+  ArchRProj = proj_test_4,
+  cells = cells_to_keep,
+  outputDirectory = "Data/combined_analysis_v5_afterround3/",
+  dropCells = TRUE,
+  force = TRUE
+  )
+
+length(proj_test_4$cellNames)
+length(proj_test_5$cellNames)
+
+## Save the project
+proj_test_5 <- saveArchRProject(ArchRProj = proj_test_5, outputDirectory = "Data/combined_analysis_v5_afterround3/", load = TRUE)
+
+## Remove object to not get confused
+rm(proj_test_4)
+
+## UMAP with new labels
+p1 <- plotEmbedding(ArchRProj = proj_test_5, colorBy = "cellColData", name = "Final_labels", embedding = "UMAP")
+p2 <- plotEmbedding(ArchRProj = proj_test_5, colorBy = "cellColData", name = "Cell_types", embedding = "UMAP")
+
+## Saving the annotated UMAP
+plotPDF(p1, name = "CombinedAnalysis_UMAP_v5_FinalAnnotation.pdf", ArchRProj = proj_test_5, addDOC = FALSE, width = 5, height = 5)
+plotPDF(p2, name = "CombinedAnalysis_UMAP_v5_CellTypeFinalAnnotation.pdf", ArchRProj = proj_test_5, addDOC = FALSE, width = 5, height = 5)
+```
+## Integrating with scRNA-seq
+### Ensuring the gene names are in the same format
+```{r}
+## Back to single threading
+addArchRThreads(threads = 1)
+
+# Integration
+sc_Atlas <- readRDS("~/Scratch_MF/Paper/ResourceFiles/Atlases/Complete/MouseCompleteAtlas_FinalVersion_2ndJan2025.rds")
+
+## Renaming gene IDs
+counts <- sc_Atlas@assays$RNA@counts
+rownames(counts) <- sub(pattern = ".*?-", replacement = '', rownames(counts))
+to_be_removed <- rownames(counts)[duplicated(rownames(counts))] %>% unique()
+counts <- counts[!(rownames(counts) %in% to_be_removed),]
+
+## Saving meta and creating a new object
+meta <- sc_Atlas@meta.data
+meta <- meta %>% dplyr::select(orig.ident, organ, preg.stage, nCount_RNA, nFeature_RNA, percent.mt, percent.rr, DF.classifications_0.05, DF.classifications_0.1, cell.type, cell.class)
+sc_Atlas <- CreateSeuratObject(counts = counts, project = "MouseAtlas", min.cells = 3, min.features = 200, meta.data = meta)
+
+## Removing duplicates from the matrix in ArchR. 
+genes_archr <- proj_test_5@geneAnnotation$genes$symbol
+filt_genes_archr <- genes_archr[!duplicated(genes_archr)]
+filt_genes_archr <- proj_test_5@geneAnnotation$genes[proj_test_5@geneAnnotation$genes$symbol %in% filt_genes_archr,]
+## Adding a new gene score matrix
+#proj_test_3 <- addGeneScoreMatrix(input = proj_test_3, genes = filt_genes_archr, matrixName = "GeneScoreMatrixNoDuplicates", force = TRUE)
+
+## Unconstrained integration
+proj_test_5 <- addGeneIntegrationMatrix(
+    ArchRProj = proj_test_5, 
+    useMatrix = "GeneScoreMatrix",
+    matrixName = "GeneIntegrationMatrix",
+    reducedDims = "IterativeLSI",
+    seRNA = sc_Atlas,
+    addToArrow = TRUE,
+    groupRNA = "cell.type",
+    nameCell = "predictedCell_Un",
+    nameGroup = "predictedGroup_Un",
+    nameScore = "predictedScore_Un",
+    genesUse = filt_genes_archr$symbol,
+    force = TRUE)
+
+plotEmbedding(
+    proj_test_5, 
+    colorBy = "cellColData", 
+    name = "Cell_types")
+
+plotEmbedding(
+    proj_test_5, 
+    colorBy = "cellColData", 
+    name = "predictedGroup_Un")
+```
+## Assessing integration
+```{r}
+cM <- confusionMatrix(proj_test_5$Cell_types, proj_test_5$predictedGroup_Un)
+labelOld <- rownames(cM)
+labelNew <- colnames(cM)[apply(cM, 1, which.max)]
+
+proj_test_5$FinalCellTypeAnnotation_fromRNA <- mapLabels(proj_test_5$Cell_types, newLabels = labelNew, oldLabels = labelOld)
+
+plotEmbedding(proj_test_5, colorBy = "cellColData", name = "Cell_types")
+plotEmbedding(proj_test_5, colorBy = "cellColData", name = "FinalCellTypeAnnotation_fromRNA")
+
+## Extracting embedding and metadata to plot the UMAP in ggplot2/Seurat
+umap_coordinates <- getEmbedding(ArchRProj = proj_test_5, embedding = "UMAP")
+meta <- getCellColData(proj_test_5) %>% as.data.frame()
+umap_plotting <- cbind(umap_coordinates, meta[rownames(umap_coordinates),])
+umap_plotting <- umap_plotting %>% dplyr::rename("UMAP1" = "IterativeLSI#UMAP_Dimension_1", "UMAP2" = "IterativeLSI#UMAP_Dimension_2")
+
+## Colour palette
+palette <- c("Bcells" = "#7FB3D5",
+              "uNK" = "#08519C",
+              "Macrophages" = "#3182BD",
+              "Monocytes" = "#08306B",
+             "Erythroid" = "#6A3D9A",
+             "DecidualStromal" = "#E6AB02",
+             "EndothelialMaternal" = "#C71585",
+              "Fibroblast" = "#A6761D",
+             "ParietalYolkSac" = "#969696",
+             "LabyrinthTrophoblastProgenitors" = "#005F66",
+             "JunctionalZoneTrophoblastProgenitors" = "#007F86",
+             "Spongiotrophoblast" = "#009FA6",
+             "GlycogenTrophoblast" = "#00BFC4",
+             "SinusoidalTGC" = "#33CCD1",
+             "SyncytiotrophoblastI" = "#66D9DE",
+             "SyncytiotrophoblastII" = "#99E6EA")
+
+## Plotting UMAP
+p1 <- ggplot(umap_plotting, aes(UMAP1, UMAP2, color = FinalCellTypeAnnotation_fromRNA)) + geom_point(size = 0.3, alpha = 0.7) + theme(panel.background = element_blank(), axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), legend.position = "none", legend.justification = "center", plot.title = element_blank(), legend.text = element_text(size = 18)) + scale_colour_manual(values = palette)
+ggsave(filename = "Visuals/ATAC_UMAP_Annotated.png", plot = p1, width = 12, height = 10)
+
+## Legend
+legend_data <- data.frame(cell_type = names(palette), color = palette)
+rownames(legend_data) <- NULL
+legend_data$category <- c(rep("White Blood Cells", 4), rep("Other Blood Cells", 1), rep("Uterine", 1), rep("Endothelial", 1), rep("Stromal", 1), rep("Yolk Sac", 1), rep("Trophoblast", 7))
+legend_data$cell_label <- c("B-cells", "uNK", "Macrophages", "Monocytes", "Erythroid", "DSC", "Endothelial (M)", "Fibroblast", "Parietal", "Labyrinth progenitors", "JZ progenitors", "SpT", "GlyT", "S-TGC", "SynT I", "SynT II")
+legend_data$y <- c(11:8, 6, 4, 2, 11, 9, 7:1)
+legend_data$x <- c(rep(0,7), rep(1,9))
+legend_data
+
+p_legend <- ggplot(legend_data, aes(x = x, y = y)) +
+  geom_point(aes(color = cell_type), size = 5) +  # colored box
+  geom_text(aes(label = cell_label), hjust = 0, nudge_x = 0.2, size = 4) + # cell type labels
+  scale_color_manual(values = setNames(legend_data$color, legend_data$cell_type)) +
+  # Add category headers as text (we place them manually)
+  geom_text(
+    data = subset(legend_data, !duplicated(category)),
+    aes(x = x - 0.2, y = y + 1, label = category),
+    hjust = 0, vjust = 1, fontface = "bold", size = 5
+  ) +
+  xlim(-0.5, 2) +   # space for labels
+  theme_void() +
+  theme(legend.position = "none")
+
+
+# Save figure
+ggsave("Visuals/ATAC_UMAP_Legend.png", plot = p_legend, width = 6, height = 4, dpi = 300)
+```
+## Calling peaks with macs2
+```{r}
+## Running group coverages
+addArchRThreads(threads = 64)
+proj_test_5 <- addGroupCoverages(ArchRProj = proj_test_5, groupBy = "FinalCellTypeAnnotation_fromRNA")
+
+#Sys.unsetenv("PYTHONPATH")
+addArchRThreads(threads = 1)
+proj_test_5 <- addReproduciblePeakSet(
+    ArchRProj = proj_test_5, 
+    groupBy = "FinalCellTypeAnnotation_fromRNA", 
+    pathToMacs2 = "/camp/home/falism/.conda/envs/macs2-env/bin/macs2",
+    genomeSize = 2723414844 #only includes chr1-19 and X and Y
+)
+
+## Save the project
+proj_test_5 <- addPeakMatrix(proj_test_5)
+```
+## Getting marker peaks
+```{r}
+markerPeaks <- getMarkerFeatures(
+    ArchRProj = proj_test_5, 
+    useMatrix = "PeakMatrix", 
+    groupBy = "FinalCellTypeAnnotation_fromRNA",
+  bias = c("TSSEnrichment", "log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+
+## Saving the list
+marker_list <- getMarkers(markerPeaks, cutOff = "FDR <= 0.05 & Log2FC >= 1")
+saveRDS("Data/CompleteAtlas_Final_MarkerPeaks_Unfiltered.rds", object = test)
+
+## Saving the summarized experiment object
+saveRDS("Data/CompleteAtlas_Final_MarkerPeaks_Unfiltered_SummarizedExperimentObject.rds", object = markerPeaks)
+
+## Investigating markers
+heatmapPeaks <- markerHeatmap(seMarker = markerPeaks, cutOff = "FDR <= 0.05 & Log2FC >= 0.5", transpose = TRUE)
+draw(heatmapPeaks, heatmap_legend_side = "bot", annotation_legend_side = "bot")
+
+## Heatmap again (replotted)
+proj_test_5 <- loadArchRProject("Data/combined_analysis_v5_annotated_peakscalled/")
+markerPeaks <- readRDS("Data/CompleteAtlas_Final_MarkerPeaks_Unfiltered_SummarizedExperimentObject.rds")
+
+## Using the source code from ArchR to replot the heatmap (https://rdrr.io/github/GreenleafLab/ArchR/src/R/MarkerFeatures.R); scaleTo - default = 10^4
+mat <- as.matrix(SummarizedExperiment::assays(markerPeaks)[["Mean"]])
+mat <- log2(t(t(mat)/colSums(mat)) * 10^4 + 1)
+heatmap(x = mat, scale = "row")
+
+## Drawing differentialy accessed peaks
+heatmapPeaks <- markerHeatmap(seMarker = markerPeaks, cutOff = "FDR <= 0.05 & Log2FC >= 0.5", transpose = TRUE)
+heatmapPeaks
+draw(heatmapPeaks, heatmap_legend_side = "bot", annotation_legend_side = "bot")
+```
+## Plotting specific markers
+```{r}
+p <- plotBrowserTrack(
+    ArchRProj = proj_test_5, 
+    groupBy = "FinalCellTypeAnnotation_fromRNA",
+    geneSymbol = c("Syna"),
+    features =  getMarkers(markerPeaks, cutOff = "FDR <= 0.05 & Log2FC >= 0.5", returnGR = TRUE)["SyncytiotrophoblastI"],
+    upstream = 50000,
+    downstream = 50000
+)
+
+png(filename = "Visuals/Syna_LinkPlot_test.png", width = 1200, height = 1200)
+grid::grid.newpage()
+grid::grid.draw(p$Syna)
+dev.off()
+```
+## Motif enrichment
+```{r}
+addArchRThreads(threads = 1)
+proj_test_5 <- addMotifAnnotations(ArchRProj = proj_test_5, species = "Mus musculus", name = "Motif", motifSet = "cisbp", force = TRUE)
+
+## Save the project
+proj_test_5 <- saveArchRProject(ArchRProj = proj_test_5, outputDirectory = "Data/combined_analysis_v5_annotated_peakscalled", load = TRUE)
+```
+## Identifying motifs enriched in differentially accessible peaks
+```{r}
+enrichMotifs <- peakAnnoEnrichment(
+    seMarker = markerPeaks,
+    ArchRProj = proj_test_5,
+    peakAnnotation = "Motif",
+    cutOff = "FDR <= 0.05 & Log2FC >= 0.5"
+)
+
+## Obtain top 25 motifs per cell type (TESTING)
+#test <- enrichMotifs@assays@data$mlog10Padj
+#test[test < -log10(0.01)] <- -log10(0.01)
+#heatmap(test %>% as.matrix(), scale = "row")
+
+heatmapEM <- plotEnrichHeatmap(enrichMotifs, n = 7, transpose = TRUE)
+ComplexHeatmap::draw(heatmapEM, heatmap_legend_side = "bot", annotation_legend_side = "bot")
+plotPDF(heatmapEM, name = 'MotifsEnrichedHeatmap_Test_n5_FDR0.05_Log2FC0.5', width = 12, height = 6, ArchRProj = proj_test_5, addDOC = FALSE)
+```
+## Computing co-accessibility of peaks and gene-to-peaks linkage
+```{r}
+proj_test_5 <- addCoAccessibility(
+    ArchRProj = proj_test_5,
+    reducedDims = "IterativeLSI"
+)
+
+proj_test_5 <- addPeak2GeneLinks(
+    ArchRProj = proj_test_5,
+    reducedDims = "IterativeLSI"
+)
+```
+## Plotting linkage to gene expression
+```{r}
+## Identify peak2gene link
+p2g <- getPeak2GeneLinks(
+    ArchRProj = proj_test_5,
+    corCutOff = 0.45,
+    resolution = 1,
+    returnLoops = TRUE
+)
+
+p <- plotPeak2GeneHeatmap(ArchRProj = proj_test_5, groupBy = "FinalCellTypeAnnotation_fromRNA")
+plotPDF(p, name = 'Peak2GeneLinks', width = 12, height = 15, ArchRProj = proj_test_5, addDOC = FALSE)
+```
+## Saving the object to ensure both co-accessibility and peak2gene linkage information are included
+```{r}
+## Save the project
+proj_test_5 <- saveArchRProject(ArchRProj = proj_test_5, outputDirectory = "Data/combined_analysis_v5_annotated_peakscalled", load = TRUE)
+```
+## Extracting files for analysis with pycistopic
+```{r}
+## Saving metadata
+metadata <- proj_test@cellColData %>% as.data.frame()
+write.table(x = metadata, file = "Data/MouseAtlas_FinalAnnotation_Metadata", sep = "\t")
+```
+## Plotting top 10 enriched motifs per cell type
+```{r}
+addArchRThreads(threads = 1)
+proj_test <- loadArchRProject("Data/combined_analysis_v5_annotated_peakscalled/")
+markerPeaks <- readRDS("Data/CompleteAtlas_Final_MarkerPeaks_Unfiltered_SummarizedExperimentObject.rds")
+
+motifsUp <- peakAnnoEnrichment(
+    seMarker = markerPeaks,
+    ArchRProj = proj_test,
+    peakAnnotation = "Motif",
+    cutOff = "FDR <= 0.05 & Log2FC >= 0.5"
+)
+```
+## Plotting top 10 enriched per cell type
+### SynTII
+```{r}
+mlog10Padj <- assays(motifsUp)[[1]]
+mlog10Padj
+df <- data.frame(TF = rownames(motifsUp), mlog10Padj = mlog10Padj$SyncytiotrophoblastII)
+df <- df[order(df$mlog10Padj, decreasing = TRUE),]
+df$rank <- seq_len(nrow(df))
+
+ggUp <- ggplot(df, aes(rank, mlog10Padj, color = mlog10Padj)) + 
+  geom_point(size = 1) +
+  ggrepel::geom_label_repel(
+        data = df[rev(seq_len(10)), ], aes(x = rank, y = mlog10Padj, label = TF), 
+        size = 5,
+        nudge_x = 2,
+        color = "black",
+        max.overlaps = 20
+  ) + theme_ArchR() + 
+  ylab("-log10(P-adj) Motif Enrichment") + 
+  xlab("Rank Sorted TFs Enriched") +
+  scale_color_gradientn(colors = paletteContinuous(set = "comet"))
+
+ggsave(filename = "Visuals/CombinedAnalysis_SynTII_Top10TFs_AdjPVal0.05_log2FC0.5.pdf", plot = ggUp, width = 15, height = 10)
+```
+### SynTI
+```{r}
+mlog10Padj <- assays(motifsUp)[[1]]
+mlog10Padj
+df <- data.frame(TF = rownames(motifsUp), mlog10Padj = mlog10Padj$SyncytiotrophoblastI)
+df <- df[order(df$mlog10Padj, decreasing = TRUE),]
+df$rank <- seq_len(nrow(df))
+
+ggUp <- ggplot(df, aes(rank, mlog10Padj, color = mlog10Padj)) + 
+  geom_point(size = 1) +
+  ggrepel::geom_label_repel(
+        data = df[rev(seq_len(10)), ], aes(x = rank, y = mlog10Padj, label = TF), 
+        size = 5,
+        nudge_x = 2,
+        color = "black",
+        max.overlaps = 20
+  ) + theme_ArchR() + 
+  ylab("-log10(P-adj) Motif Enrichment") + 
+  xlab("Rank Sorted TFs Enriched") +
+  scale_color_gradientn(colors = paletteContinuous(set = "comet"))
+
+ggsave(filename = "Visuals/CombinedAnalysis_SynTI_Top10TFs_AdjPVal0.05_log2FC0.5.pdf", plot = ggUp, width = 15, height = 10)
+```
+### S-TGC
+```{r}
+mlog10Padj <- assays(motifsUp)[[1]]
+mlog10Padj
+df <- data.frame(TF = rownames(motifsUp), mlog10Padj = mlog10Padj$SinusoidalTGC)
+df <- df[order(df$mlog10Padj, decreasing = TRUE),]
+df$rank <- seq_len(nrow(df))
+
+ggUp <- ggplot(df, aes(rank, mlog10Padj, color = mlog10Padj)) + 
+  geom_point(size = 1) +
+  ggrepel::geom_label_repel(
+        data = df[rev(seq_len(10)), ], aes(x = rank, y = mlog10Padj, label = TF), 
+        size = 5,
+        nudge_x = 2,
+        color = "black",
+        max.overlaps = 20
+  ) + theme_ArchR() + 
+  ylab("-log10(P-adj) Motif Enrichment") + 
+  xlab("Rank Sorted TFs Enriched") +
+  scale_color_gradientn(colors = paletteContinuous(set = "comet"))
+
+ggsave(filename = "Visuals/CombinedAnalysis_STGC_Top10TFs_AdjPVal0.05_log2FC0.5.pdf", plot = ggUp, width = 15, height = 10)
+```
+### SpT
+```{r}
+mlog10Padj <- assays(motifsUp)[[1]]
+mlog10Padj
+df <- data.frame(TF = rownames(motifsUp), mlog10Padj = mlog10Padj$Spongiotrophoblast)
+df <- df[order(df$mlog10Padj, decreasing = TRUE),]
+df$rank <- seq_len(nrow(df))
+
+ggUp <- ggplot(df, aes(rank, mlog10Padj, color = mlog10Padj)) + 
+  geom_point(size = 1) +
+  ggrepel::geom_label_repel(
+        data = df[rev(seq_len(10)), ], aes(x = rank, y = mlog10Padj, label = TF), 
+        size = 5,
+        nudge_x = 2,
+        color = "black",
+        max.overlaps = 20
+  ) + theme_ArchR() + 
+  ylab("-log10(P-adj) Motif Enrichment") + 
+  xlab("Rank Sorted TFs Enriched") +
+  scale_color_gradientn(colors = paletteContinuous(set = "comet"))
+
+ggsave(filename = "Visuals/CombinedAnalysis_SpT_Top10TFs_AdjPVal0.05_log2FC0.5.pdf", plot = ggUp, width = 15, height = 10)
+```
+### GlyT
+```{r}
+mlog10Padj <- assays(motifsUp)[[1]]
+mlog10Padj
+df <- data.frame(TF = rownames(motifsUp), mlog10Padj = mlog10Padj$GlycogenTrophoblast)
+df <- df[order(df$mlog10Padj, decreasing = TRUE),]
+df$rank <- seq_len(nrow(df))
+
+ggUp <- ggplot(df, aes(rank, mlog10Padj, color = mlog10Padj)) + 
+  geom_point(size = 1) +
+  ggrepel::geom_label_repel(
+        data = df[rev(seq_len(10)), ], aes(x = rank, y = mlog10Padj, label = TF), 
+        size = 5,
+        nudge_x = 2,
+        color = "black",
+        max.overlaps = 20
+  ) + theme_ArchR() + 
+  ylab("-log10(P-adj) Motif Enrichment") + 
+  xlab("Rank Sorted TFs Enriched") +
+  scale_color_gradientn(colors = paletteContinuous(set = "comet"))
+
+ggsave(filename = "Visuals/CombinedAnalysis_GlyT_Top10TFs_AdjPVal0.05_log2FC0.5.pdf", plot = ggUp, width = 15, height = 10)
+```
+### LaTP
+```{r}
+mlog10Padj <- assays(motifsUp)[[1]]
+mlog10Padj
+df <- data.frame(TF = rownames(motifsUp), mlog10Padj = mlog10Padj$LabyrinthTrophoblastProgenitors)
+df <- df[order(df$mlog10Padj, decreasing = TRUE),]
+df$rank <- seq_len(nrow(df))
+
+ggUp <- ggplot(df, aes(rank, mlog10Padj, color = mlog10Padj)) + 
+  geom_point(size = 1) +
+  ggrepel::geom_label_repel(
+        data = df[rev(seq_len(10)), ], aes(x = rank, y = mlog10Padj, label = TF), 
+        size = 5,
+        nudge_x = 2,
+        color = "black",
+        max.overlaps = 20
+  ) + theme_ArchR() + 
+  ylab("-log10(P-adj) Motif Enrichment") + 
+  xlab("Rank Sorted TFs Enriched") +
+  scale_color_gradientn(colors = paletteContinuous(set = "comet"))
+
+ggsave(filename = "Visuals/CombinedAnalysis_LaTP_Top10TFs_AdjPVal0.05_log2FC0.5.pdf", plot = ggUp, width = 15, height = 10)
+```
+### JZTP
+```{r}
+mlog10Padj <- assays(motifsUp)[[1]]
+mlog10Padj
+df <- data.frame(TF = rownames(motifsUp), mlog10Padj = mlog10Padj$JunctionalZoneTrophoblastProgenitors)
+df <- df[order(df$mlog10Padj, decreasing = TRUE),]
+df$rank <- seq_len(nrow(df))
+
+ggUp <- ggplot(df, aes(rank, mlog10Padj, color = mlog10Padj)) + 
+  geom_point(size = 1) +
+  ggrepel::geom_label_repel(
+        data = df[rev(seq_len(10)), ], aes(x = rank, y = mlog10Padj, label = TF), 
+        size = 5,
+        nudge_x = 2,
+        color = "black",
+        max.overlaps = 20
+  ) + theme_ArchR() + 
+  ylab("-log10(P-adj) Motif Enrichment") + 
+  xlab("Rank Sorted TFs Enriched") +
+  scale_color_gradientn(colors = paletteContinuous(set = "comet"))
+
+ggsave(filename = "Visuals/CombinedAnalysis_JZTP_Top10TFs_AdjPVal0.05_log2FC0.5.pdf", plot = ggUp, width = 15, height = 10)
+```
+## 7/8/2026: Viewing the object and saving the metadata in preparation for SCENIC+ (final run)
+```{r}
+## Loading the project
+proj_test_5 <- loadArchRProject("Data/combined_analysis_v5_annotated_peakscalled/")
+
+## Saving metadata
+metadata <- proj_test_5@cellColData %>% as.data.frame()
+
+## Adjusting names to adhere to the "cell.type.short" format
+metadata <- metadata %>% mutate(cell.type.short = case_when(FinalCellTypeAnnotation_fromRNA == "EndothelialMaternal" ~ "EndoM",
+                                                FinalCellTypeAnnotation_fromRNA == "SinusoidalTGC" ~ "STGC",
+                                                FinalCellTypeAnnotation_fromRNA == "SyncytiotrophoblastI" ~ "SynTI",
+                                                FinalCellTypeAnnotation_fromRNA == "SyncytiotrophoblastII" ~ "SynTII",
+                                                FinalCellTypeAnnotation_fromRNA == "ParietalYolkSac" ~ "ParietalYS",
+                                                FinalCellTypeAnnotation_fromRNA == "GlycogenTrophoblast" ~ "GlyT",
+                                                FinalCellTypeAnnotation_fromRNA == "Spongiotrophoblast" ~ "SpT",
+                                                FinalCellTypeAnnotation_fromRNA == "DecidualStromal" ~ "DSC",
+                                                FinalCellTypeAnnotation_fromRNA == "JunctionalZoneTrophoblastProgenitors" ~ "JZTP",
+                                                FinalCellTypeAnnotation_fromRNA == "LabyrinthTrophoblastProgenitors" ~ "LaTP",
+                                                .default = FinalCellTypeAnnotation_fromRNA))
+
+## Saving
+write.table(x = metadata, file = "../scenic_complete_final/Data/MouseATACAtlas_FinalAnnotation_Metadata_7thAug2026.txt", sep = "\t")
+```
+## Concluding the session
+```{r}
+sessionInfo()
+```
