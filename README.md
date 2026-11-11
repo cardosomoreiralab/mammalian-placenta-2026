@@ -17,10 +17,9 @@ Files necessary to replicate the analysis (such as gene lists, orthology tables,
 
 ## Data availability
 
-* Single-nucleus RNA-seq: ArrayExpress 
-* Single-nucleus ATAC-seq: ArrayExpress 
-* Annotated Seurat objects for all six atlases, the ArchR project and the
-  SCENIC+ output are deposited alongside the raw data
+* Single-nucleus RNA-seq (fastq): ArrayExpress (E-MTAB-17882)
+* Single-nucleus ATAC-seq (fastq): ArrayExpress (E-MTAB-17881)
+* Annotated Seurat objects for all six atlases and ArchR metadata file are deposited alongside the raw files
 
 ## Data exploration
 
